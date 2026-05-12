@@ -1,0 +1,7 @@
+{
+  "name": "ra2-replica",
+  "version-string": "0.1.0",
+  "dependencies": [
+    "sdl2"
+  ]
+}

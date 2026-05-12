@@ -1,0 +1,49 @@
+# IDE settings
+.idea/
+.vs/
+.vscode/
+
+# CMake / build directories
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+Makefile
+
+# Visual Studio / MSVC / MinGW outputs
+*.obj
+*.o
+*.lo
+*.a
+*.la
+*.lib
+*.dll
+*.dll.a
+*.exp
+*.exe
+*.ilk
+*.idb
+*.pdb
+*.stackdump
+
+# Visual Studio user files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Logs and runtime-local files
+*.log
+imgui.ini
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Assets
+assets_origin

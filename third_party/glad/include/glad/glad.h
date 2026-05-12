@@ -1,0 +1,106 @@
+#pragma once
+
+#include <SDL_opengl.h>
+#include <SDL_opengl_glext.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef void* (*GLADloadproc)(const char* name);
+
+extern int GLAD_GL_VERSION_3_3;
+
+extern PFNGLCREATESHADERPROC glad_glCreateShader;
+extern PFNGLSHADERSOURCEPROC glad_glShaderSource;
+extern PFNGLCOMPILESHADERPROC glad_glCompileShader;
+extern PFNGLGETSHADERIVPROC glad_glGetShaderiv;
+extern PFNGLGETSHADERINFOLOGPROC glad_glGetShaderInfoLog;
+extern PFNGLDELETESHADERPROC glad_glDeleteShader;
+extern PFNGLCREATEPROGRAMPROC glad_glCreateProgram;
+extern PFNGLATTACHSHADERPROC glad_glAttachShader;
+extern PFNGLLINKPROGRAMPROC glad_glLinkProgram;
+extern PFNGLGETPROGRAMIVPROC glad_glGetProgramiv;
+extern PFNGLGETPROGRAMINFOLOGPROC glad_glGetProgramInfoLog;
+extern PFNGLDELETEPROGRAMPROC glad_glDeleteProgram;
+extern PFNGLUSEPROGRAMPROC glad_glUseProgram;
+extern PFNGLGETUNIFORMLOCATIONPROC glad_glGetUniformLocation;
+extern PFNGLUNIFORM1IPROC glad_glUniform1i;
+extern PFNGLUNIFORM2FPROC glad_glUniform2f;
+extern PFNGLUNIFORM3FPROC glad_glUniform3f;
+extern PFNGLUNIFORM4FPROC glad_glUniform4f;
+extern PFNGLUNIFORM1FPROC glad_glUniform1f;
+extern PFNGLUNIFORM3FVPROC glad_glUniform3fv;
+extern PFNGLUNIFORM4FVPROC glad_glUniform4fv;
+extern PFNGLGENVERTEXARRAYSPROC glad_glGenVertexArrays;
+extern PFNGLBINDVERTEXARRAYPROC glad_glBindVertexArray;
+extern PFNGLDELETEVERTEXARRAYSPROC glad_glDeleteVertexArrays;
+extern PFNGLGENBUFFERSPROC glad_glGenBuffers;
+extern PFNGLBINDBUFFERPROC glad_glBindBuffer;
+extern PFNGLBUFFERDATAPROC glad_glBufferData;
+extern PFNGLDELETEBUFFERSPROC glad_glDeleteBuffers;
+extern PFNGLENABLEVERTEXATTRIBARRAYPROC glad_glEnableVertexAttribArray;
+extern PFNGLVERTEXATTRIBPOINTERPROC glad_glVertexAttribPointer;
+extern PFNGLVERTEXATTRIBDIVISORPROC glad_glVertexAttribDivisor;
+extern PFNGLDRAWARRAYSINSTANCEDPROC glad_glDrawArraysInstanced;
+extern PFNGLACTIVETEXTUREPROC glad_glActiveTexture;
+extern PFNGLGENFRAMEBUFFERSPROC glad_glGenFramebuffers;
+extern PFNGLBINDFRAMEBUFFERPROC glad_glBindFramebuffer;
+extern PFNGLDELETEFRAMEBUFFERSPROC glad_glDeleteFramebuffers;
+extern PFNGLFRAMEBUFFERTEXTURE2DPROC glad_glFramebufferTexture2D;
+extern PFNGLGENRENDERBUFFERSPROC glad_glGenRenderbuffers;
+extern PFNGLBINDRENDERBUFFERPROC glad_glBindRenderbuffer;
+extern PFNGLRENDERBUFFERSTORAGEPROC glad_glRenderbufferStorage;
+extern PFNGLFRAMEBUFFERRENDERBUFFERPROC glad_glFramebufferRenderbuffer;
+extern PFNGLDELETERENDERBUFFERSPROC glad_glDeleteRenderbuffers;
+extern PFNGLCHECKFRAMEBUFFERSTATUSPROC glad_glCheckFramebufferStatus;
+
+int gladLoadGLLoader(GLADloadproc load);
+
+#ifdef __cplusplus
+}
+#endif
+
+#define glCreateShader glad_glCreateShader
+#define glShaderSource glad_glShaderSource
+#define glCompileShader glad_glCompileShader
+#define glGetShaderiv glad_glGetShaderiv
+#define glGetShaderInfoLog glad_glGetShaderInfoLog
+#define glDeleteShader glad_glDeleteShader
+#define glCreateProgram glad_glCreateProgram
+#define glAttachShader glad_glAttachShader
+#define glLinkProgram glad_glLinkProgram
+#define glGetProgramiv glad_glGetProgramiv
+#define glGetProgramInfoLog glad_glGetProgramInfoLog
+#define glDeleteProgram glad_glDeleteProgram
+#define glUseProgram glad_glUseProgram
+#define glGetUniformLocation glad_glGetUniformLocation
+#define glUniform1i glad_glUniform1i
+#define glUniform2f glad_glUniform2f
+#define glUniform3f glad_glUniform3f
+#define glUniform4f glad_glUniform4f
+#define glUniform1f glad_glUniform1f
+#define glUniform3fv glad_glUniform3fv
+#define glUniform4fv glad_glUniform4fv
+#define glGenVertexArrays glad_glGenVertexArrays
+#define glBindVertexArray glad_glBindVertexArray
+#define glDeleteVertexArrays glad_glDeleteVertexArrays
+#define glGenBuffers glad_glGenBuffers
+#define glBindBuffer glad_glBindBuffer
+#define glBufferData glad_glBufferData
+#define glDeleteBuffers glad_glDeleteBuffers
+#define glEnableVertexAttribArray glad_glEnableVertexAttribArray
+#define glVertexAttribPointer glad_glVertexAttribPointer
+#define glVertexAttribDivisor glad_glVertexAttribDivisor
+#define glDrawArraysInstanced glad_glDrawArraysInstanced
+#define glActiveTexture glad_glActiveTexture
+#define glGenFramebuffers glad_glGenFramebuffers
+#define glBindFramebuffer glad_glBindFramebuffer
+#define glDeleteFramebuffers glad_glDeleteFramebuffers
+#define glFramebufferTexture2D glad_glFramebufferTexture2D
+#define glGenRenderbuffers glad_glGenRenderbuffers
+#define glBindRenderbuffer glad_glBindRenderbuffer
+#define glRenderbufferStorage glad_glRenderbufferStorage
+#define glFramebufferRenderbuffer glad_glFramebufferRenderbuffer
+#define glDeleteRenderbuffers glad_glDeleteRenderbuffers
+#define glCheckFramebufferStatus glad_glCheckFramebufferStatus
