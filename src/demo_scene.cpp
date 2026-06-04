@@ -7,6 +7,10 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
 #include <unordered_set>
 
 namespace {
@@ -17,9 +21,110 @@ struct ScreenRect {
   float bottom = 0.0f;
 };
 
+struct BarColor {
+  float r = 1.0f;
+  float g = 1.0f;
+  float b = 1.0f;
+  float a = 1.0f;
+};
+
+struct BuildingHealthColors {
+  BarColor black;
+  BarColor deep;
+  BarColor inner;
+};
+
+// 经验换算：把 art.ini 的逻辑 Height 转为选择骨架/血条使用的屏幕像素高度。
+constexpr float kArtHeightToBonePixelsScale = 0.58f;
+
 [[nodiscard]] std::uint64_t tileKey(const TileCoord coord) {
   return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.x)) << 32) |
          static_cast<std::uint32_t>(coord.y);
+}
+
+[[nodiscard]] Vec2 topFirstFoundationCenter(const BuildingPlacement& placement,
+                                            const Vec2 origin,
+                                            const float tileWidth,
+                                            const float tileHeight) {
+  Vec2 best = isoToScreen(placement.topLeft.x, placement.topLeft.y, origin, tileWidth, tileHeight);
+  float bestY = best.y;
+  for (const auto tile : foundationTiles(placement)) {
+    const auto center = isoToScreen(tile.x, tile.y, origin, tileWidth, tileHeight);
+    if (center.y < bestY) {
+      best = center;
+      bestY = center.y;
+    }
+  }
+  return best;
+}
+
+[[nodiscard]] Vec2 leftFirstFoundationCenter(const BuildingPlacement& placement,
+                                             const Vec2 origin,
+                                             const float tileWidth,
+                                             const float tileHeight) {
+  Vec2 best = isoToScreen(placement.topLeft.x, placement.topLeft.y, origin, tileWidth, tileHeight);
+  float bestX = best.x;
+  for (const auto tile : foundationTiles(placement)) {
+    const auto center = isoToScreen(tile.x, tile.y, origin, tileWidth, tileHeight);
+    if (center.x < bestX) {
+      best = center;
+      bestX = center.x;
+    }
+  }
+  return best;
+}
+
+[[nodiscard]] Vec2 rightFirstFoundationCenter(const BuildingPlacement& placement,
+                                              const Vec2 origin,
+                                              const float tileWidth,
+                                              const float tileHeight) {
+  Vec2 best = isoToScreen(placement.topLeft.x, placement.topLeft.y, origin, tileWidth, tileHeight);
+  float bestX = best.x;
+  for (const auto tile : foundationTiles(placement)) {
+    const auto center = isoToScreen(tile.x, tile.y, origin, tileWidth, tileHeight);
+    if (center.x > bestX) {
+      best = center;
+      bestX = center.x;
+    }
+  }
+  return best;
+}
+
+[[nodiscard]] float referenceBoneAxisLength(const int axisTiles) {
+  if (axisTiles <= 1) {
+    return 8.0f;
+  }
+  if (axisTiles == 2) {
+    return 16.0f;
+  }
+  return static_cast<float>(axisTiles - 1) * 10.0f;
+}
+
+[[nodiscard]] float buildingBoneHeightPixels(const BuildingAsset& asset, const float tileHeight) {
+  if (!asset.art.height.has_value()) {
+    return 70.0f;
+  }
+
+  // JavaRedAlert2 的 BuildingBone 使用各建筑手写 height；这里用 art.ini 的 Height
+  // 转成屏幕像素，保持“白线框落在建筑顶部附近”的同一语义。
+  return std::clamp(*asset.art.height * tileHeight * kArtHeightToBonePixelsScale, 18.0f, 190.0f);
+}
+
+[[nodiscard]] Vec2 buildingHealthBarOrigin(const BuildingAsset& asset,
+                                           const BuildingInstance& building,
+                                           const Vec2 mapOrigin,
+                                           const float tileWidth,
+                                           const float tileHeight,
+                                           const int barWidth) {
+  const auto topFirst = topFirstFoundationCenter(building.placement, mapOrigin, tileWidth, tileHeight);
+  const float boneHeight = buildingBoneHeightPixels(asset, tileHeight);
+
+  // 原版/参考项目的建筑血条贴在“顶部骨架线”上，而不是贴 sprite 的像素包围盒。
+  // 因此这里必须和 BuildingBone 一样使用 TopFirst - 虚拟高度这套坐标。
+  return Vec2{
+    topFirst.x - static_cast<float>(barWidth) + 7.0f,
+    topFirst.y - boneHeight
+  };
 }
 
 [[nodiscard]] std::vector<TileCoord> sampledRhinoTiles(const RhinoUnitState& unit) {
@@ -79,9 +184,214 @@ struct ScreenRect {
   }};
 }
 
+[[nodiscard]] std::array<RenderVertex, 6> makeQuadVerticesWithUv(const Vec2 topLeft,
+                                                                 const Vec2 topRight,
+                                                                 const Vec2 bottomRight,
+                                                                 const Vec2 bottomLeft,
+                                                                 const float u0,
+                                                                 const float v0,
+                                                                 const float u1,
+                                                                 const float v1,
+                                                                 const float depth01,
+                                                                 const float r,
+                                                                 const float g,
+                                                                 const float b,
+                                                                 const float a) {
+  return {{
+    {topLeft.x, topLeft.y, depth01, u0, v0, r, g, b, a},
+    {topRight.x, topRight.y, depth01, u1, v0, r, g, b, a},
+    {bottomRight.x, bottomRight.y, depth01, u1, v1, r, g, b, a},
+    {topLeft.x, topLeft.y, depth01, u0, v0, r, g, b, a},
+    {bottomRight.x, bottomRight.y, depth01, u1, v1, r, g, b, a},
+    {bottomLeft.x, bottomLeft.y, depth01, u0, v1, r, g, b, a}
+  }};
+}
+
+[[nodiscard]] bool isWarFactory(const std::string& buildingId) {
+  return buildingId == "GAWEAP" || buildingId == "NAWEAP";
+}
+
+[[nodiscard]] bool rhinoInWarFactoryExitLane(const BuildingInstance& building,
+                                             const RhinoUnitState& rhinoUnit) {
+  const float localX = rhinoUnit.tilePosition.x - static_cast<float>(building.placement.topLeft.x);
+  const float localY = rhinoUnit.tilePosition.y - static_cast<float>(building.placement.topLeft.y);
+  return localX >= 0.25f && localX <= 4.25f && localY >= -1.0f && localY <= 1.5f;
+}
+
+void drawSolidRect(Renderer2D& renderer,
+                   const float x,
+                   const float y,
+                   const float width,
+                   const float height,
+                   const BarColor color) {
+  if (width <= 0.0f || height <= 0.0f) {
+    return;
+  }
+
+  const RenderVertex vertices[] = {
+    {x, y, 0.001f, 0.0f, 0.0f, color.r, color.g, color.b, color.a},
+    {x + width, y, 0.001f, 1.0f, 0.0f, color.r, color.g, color.b, color.a},
+    {x + width, y + height, 0.001f, 1.0f, 1.0f, color.r, color.g, color.b, color.a},
+    {x, y, 0.001f, 0.0f, 0.0f, color.r, color.g, color.b, color.a},
+    {x + width, y + height, 0.001f, 1.0f, 1.0f, color.r, color.g, color.b, color.a},
+    {x, y + height, 0.001f, 0.0f, 1.0f, color.r, color.g, color.b, color.a}
+  };
+  renderer.draw(GL_TRIANGLES, renderer.whiteTexture(), vertices, sizeof(vertices) / sizeof(vertices[0]));
+}
+
+void drawPixelLine(Renderer2D& renderer,
+                   const Vec2 origin,
+                   const int x0,
+                   const int y0,
+                   const int x1,
+                   const int y1,
+                   const float scale,
+                   const BarColor color) {
+  const int minX = std::min(x0, x1);
+  const int maxX = std::max(x0, x1);
+  const int minY = std::min(y0, y1);
+  const int maxY = std::max(y0, y1);
+  drawSolidRect(renderer,
+                origin.x + static_cast<float>(minX) * scale,
+                origin.y + static_cast<float>(minY) * scale,
+                static_cast<float>(maxX - minX + 1) * scale,
+                static_cast<float>(maxY - minY + 1) * scale,
+                color);
+}
+
+void drawSelectionLine(Renderer2D& renderer,
+                       const Vec2 from,
+                       const Vec2 to,
+                       const BarColor color = BarColor{1.0f, 1.0f, 1.0f, 1.0f}) {
+  const RenderVertex vertices[] = {
+    {from.x, from.y, 0.001f, 0.0f, 0.0f, color.r, color.g, color.b, color.a},
+    {to.x, to.y, 0.001f, 1.0f, 1.0f, color.r, color.g, color.b, color.a}
+  };
+  renderer.draw(GL_LINES, renderer.whiteTexture(), vertices, sizeof(vertices) / sizeof(vertices[0]));
+}
+
+void drawSelectedBuildingBone(Renderer2D& renderer,
+                              const BuildingAsset& asset,
+                              const BuildingInstance& building,
+                              const Vec2 mapOrigin,
+                              const float tileWidth,
+                              const float tileHeight) {
+  const auto leftFirst = leftFirstFoundationCenter(building.placement, mapOrigin, tileWidth, tileHeight);
+  const auto topFirst = topFirstFoundationCenter(building.placement, mapOrigin, tileWidth, tileHeight);
+  const auto rightFirst = rightFirstFoundationCenter(building.placement, mapOrigin, tileWidth, tileHeight);
+
+  const float boneHeight = buildingBoneHeightPixels(asset, tileHeight);
+  const float verticalHeight = std::clamp(boneHeight * 0.25f, 5.0f, 48.0f);
+  const int fxNum = std::max(1, asset.foundation.height);
+  const int fyNum = std::max(1, asset.foundation.width);
+  const float fxLength = referenceBoneAxisLength(fxNum);
+  const float fyLength = referenceBoneAxisLength(fyNum);
+
+  const Vec2 leftPoint{
+    leftFirst.x - tileWidth * 0.5f - 1.0f,
+    leftFirst.y - boneHeight + tileHeight * 0.47f
+  };
+  const Vec2 topPoint{
+    topFirst.x,
+    topFirst.y - boneHeight
+  };
+  const Vec2 rightPoint{
+    rightFirst.x + tileWidth * 0.5f - 3.0f,
+    rightFirst.y - boneHeight + tileHeight * 0.40f
+  };
+
+  constexpr BarColor kWhite{1.0f, 1.0f, 1.0f, 0.92f};
+  drawSelectionLine(renderer, leftPoint, Vec2{leftPoint.x, leftPoint.y + verticalHeight}, kWhite);
+  drawSelectionLine(renderer, leftPoint, Vec2{leftPoint.x + fyLength, leftPoint.y + fyLength * 0.5f}, kWhite);
+  drawSelectionLine(renderer, leftPoint, Vec2{leftPoint.x + fxLength, leftPoint.y - fxLength * 0.5f}, kWhite);
+
+  drawSelectionLine(renderer, topPoint, Vec2{topPoint.x, topPoint.y + verticalHeight}, kWhite);
+  drawSelectionLine(renderer, topPoint, Vec2{topPoint.x - fxLength, topPoint.y + fxLength * 0.5f}, kWhite);
+  drawSelectionLine(renderer, topPoint, Vec2{topPoint.x + fyLength, topPoint.y + fyLength * 0.5f}, kWhite);
+
+  drawSelectionLine(renderer, rightPoint, Vec2{rightPoint.x, rightPoint.y + verticalHeight}, kWhite);
+  drawSelectionLine(renderer, rightPoint, Vec2{rightPoint.x - fxLength, rightPoint.y + fxLength * 0.5f}, kWhite);
+  drawSelectionLine(renderer, rightPoint, Vec2{rightPoint.x - fyLength, rightPoint.y - fyLength * 0.5f}, kWhite);
+}
+
+void drawFilledBuildingHealthPip(Renderer2D& renderer,
+                                 const Vec2 origin,
+                                 const int x,
+                                 const int y,
+                                 const float scale,
+                                 const BuildingHealthColors colors,
+                                 const bool firstPip,
+                                 const bool lastPip) {
+  // 参考 JavaRedAlert2 的 BuildingBloodBar：每个建筑血块都是 6x7 的斜向像素块。
+  drawPixelLine(renderer, origin, x, y, x + 1, y, scale, colors.deep);
+
+  drawPixelLine(renderer, origin, x - 2, y + 1, x - 1, y + 1, scale, colors.deep);
+  drawPixelLine(renderer, origin, x, y + 1, x + 1, y + 1, scale, colors.inner);
+  drawPixelLine(renderer, origin, x + 2, y + 1, x + 3, y + 1, scale, colors.deep);
+
+  drawPixelLine(renderer, origin, x - 4, y + 2, x - 3, y + 2, scale, colors.deep);
+  drawPixelLine(renderer, origin, x - 2, y + 2, x + 3, y + 2, scale, colors.inner);
+  drawPixelLine(renderer, origin, x + 4, y + 2, x + 5, y + 2, scale, colors.deep);
+
+  drawPixelLine(renderer, origin, x - 2, y + 3, x - 1, y + 3, scale, colors.deep);
+  drawPixelLine(renderer, origin, x, y + 3, x + 1, y + 3, scale, colors.inner);
+  drawPixelLine(renderer, origin, x + 2, y + 3, x + 3, y + 3, scale, colors.deep);
+
+  drawPixelLine(renderer, origin, x, y + 4, x + 1, y + 4, scale, colors.deep);
+  drawPixelLine(renderer, origin, x - 4, y + 3, x - 4, y + 4, scale, colors.black);
+  drawPixelLine(renderer, origin, x - 4, y + 4, x - 3, y + 4, scale, colors.black);
+  drawPixelLine(renderer, origin, x - 3, y + 3, x - 3, y + 3, scale, colors.inner);
+  drawPixelLine(renderer, origin, x - 2, y + 4, x - 1, y + 4, scale, colors.inner);
+  drawPixelLine(renderer, origin, x, y + 5, x + 3, y + 5, scale, colors.black);
+  drawPixelLine(renderer, origin, x, y + 6, x + 1, y + 6, scale, colors.black);
+  drawPixelLine(renderer, origin, x + 2, y + 4, x + 3, y + 4, scale, colors.deep);
+
+  if (firstPip) {
+    drawPixelLine(renderer, origin, x + 5, y + 2, x + 5, y + 4, scale, colors.black);
+    drawPixelLine(renderer, origin, x + 4, y + 4, x + 5, y + 4, scale, colors.black);
+    drawPixelLine(renderer, origin, x + 4, y + 3, x + 4, y + 3, scale, colors.deep);
+  }
+  if (lastPip) {
+    drawPixelLine(renderer, origin, x - 4, y + 3, x - 4, y + 4, scale, colors.black);
+    drawPixelLine(renderer, origin, x - 4, y + 4, x - 3, y + 4, scale, colors.black);
+    drawPixelLine(renderer, origin, x - 2, y + 5, x - 1, y + 5, scale, colors.black);
+  }
+}
+
+void drawEmptyBuildingHealthPip(Renderer2D& renderer,
+                                const Vec2 origin,
+                                const int x,
+                                const int y,
+                                const float scale,
+                                const bool lastPip) {
+  constexpr BarColor kGray{180.0f / 255.0f, 180.0f / 255.0f, 180.0f / 255.0f, 1.0f};
+  constexpr BarColor kBlack{0.0f, 0.0f, 0.0f, 1.0f};
+  constexpr BarColor kWhite{1.0f, 1.0f, 1.0f, 1.0f};
+
+  drawPixelLine(renderer, origin, x, y, x + 1, y, scale, kGray);
+  drawPixelLine(renderer, origin, x - 2, y + 1, x - 1, y + 1, scale, kGray);
+  drawPixelLine(renderer, origin, x + 2, y + 1, x + 3, y + 1, scale, kGray);
+  drawPixelLine(renderer, origin, x - 4, y + 2, x - 3, y + 2, scale, kGray);
+  drawPixelLine(renderer, origin, x + 4, y + 2, x + 5, y + 2, scale, kGray);
+  drawPixelLine(renderer, origin, x - 2, y + 3, x - 1, y + 3, scale, kGray);
+  drawPixelLine(renderer, origin, x + 2, y + 3, x + 3, y + 3, scale, kGray);
+  drawPixelLine(renderer, origin, x, y + 4, x + 1, y + 4, scale, kGray);
+  drawPixelLine(renderer, origin, x - 4, y + 3, x - 4, y + 4, scale, kBlack);
+  drawPixelLine(renderer, origin, x - 4, y + 4, x - 3, y + 4, scale, kBlack);
+  drawPixelLine(renderer, origin, x, y + 5, x + 3, y + 5, scale, kBlack);
+  drawPixelLine(renderer, origin, x, y + 6, x + 1, y + 6, scale, kBlack);
+
+  if (lastPip) {
+    drawPixelLine(renderer, origin, x - 2, y + 5, x + 3, y + 5, scale, kBlack);
+    drawPixelLine(renderer, origin, x, y + 6, x + 1, y + 6, scale, kBlack);
+    drawPixelLine(renderer, origin, x + 1, y + 5, x + 1, y + 5, scale, kWhite);
+  }
+}
+
 void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                    const BuildingAsset& asset,
                                    const BuildingInstance& instance,
+                                   const RhinoUnitState& rhinoUnit,
                                    const Vec2 origin,
                                    const float tileWidth,
                                    const float tileHeight,
@@ -90,11 +400,15 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
   const UiTexture* texture = &asset.completeTexture;
   const DecodedFrame* frame = &asset.completeFrame;
 
-  if (instance.state == BuildingState::Constructing && !asset.buildupTextures.empty()) {
+  if ((instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing) &&
+      !asset.buildupTextures.empty()) {
     constexpr std::uint32_t kBuildupFrameDurationMs = 50;
-    const std::size_t frameIndex = std::min<std::size_t>(
+    const std::size_t elapsedFrame = std::min<std::size_t>(
       (nowTicks - instance.stateStartTicks) / kBuildupFrameDurationMs,
       asset.buildupTextures.size() - 1);
+    const std::size_t frameIndex = instance.state == BuildingState::Packing
+                                     ? asset.buildupTextures.size() - 1 - elapsedFrame
+                                     : elapsedFrame;
     texture = &asset.buildupTextures[frameIndex];
     frame = &asset.buildupFrames[frameIndex];
   }
@@ -107,40 +421,39 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
   const auto anchor = spriteAnchorInFrame(*frame, asset.foundation);
   const Vec2 spriteTopLeft{foundationAnchor.x - anchor.x, foundationAnchor.y - anchor.y};
   const Vec2 spriteTopRight{spriteTopLeft.x + texture->width, spriteTopLeft.y};
-  const Vec2 spriteBottomRight{spriteTopLeft.x + texture->width, spriteTopLeft.y + texture->height};
-  const Vec2 spriteBottomLeft{spriteTopLeft.x, spriteTopLeft.y + texture->height};
 
-  const LogicalDepthParams logicalDepth{
-    static_cast<float>(instance.placement.topLeft.x),
-    static_cast<float>(instance.placement.topLeft.y),
-    tileWidth,
-    tileHeight
-  };
-  const auto footprintCoords = foundationTiles(instance.placement);
-  LogicalDepthParams logicalDepthWithFootprint = logicalDepth;
-  logicalDepthWithFootprint.footprintCount =
-    std::min<int>(static_cast<int>(footprintCoords.size()), LogicalDepthParams::kMaxFootprintTiles);
-  for (int i = 0; i < logicalDepthWithFootprint.footprintCount; ++i) {
-    logicalDepthWithFootprint.footprintOffsets[static_cast<std::size_t>(i) * 2 + 0] =
-      static_cast<float>(footprintCoords[static_cast<std::size_t>(i)].x - instance.placement.topLeft.x);
-    logicalDepthWithFootprint.footprintOffsets[static_cast<std::size_t>(i) * 2 + 1] =
-      static_cast<float>(footprintCoords[static_cast<std::size_t>(i)].y - instance.placement.topLeft.y);
+  const bool warFactoryExitLane =
+    instance.state == BuildingState::Complete && isWarFactory(asset.id) &&
+    rhinoInWarFactoryExitLane(instance, rhinoUnit);
+  const bool baseLayerUnderUnit =
+    !asset.completeLayers.empty() &&
+    asset.completeLayers.front().role == BuildingAsset::LayerRole::UnderUnit;
+  if (!baseLayerUnderUnit && !warFactoryExitLane) {
+    float baseForegroundHeight = static_cast<float>(texture->height);
+    if (instance.state == BuildingState::Complete && isWarFactory(asset.id)) {
+      baseForegroundHeight = std::max(0.0f, baseForegroundHeight - tileHeight * 1.25f);
+    }
+
+    const float baseForegroundV1 =
+      texture->height > 0 ? std::clamp(baseForegroundHeight / static_cast<float>(texture->height), 0.0f, 1.0f)
+                          : 0.0f;
+    const Vec2 baseForegroundBottomRight{spriteTopLeft.x + texture->width, spriteTopLeft.y + baseForegroundHeight};
+    const Vec2 baseForegroundBottomLeft{spriteTopLeft.x, spriteTopLeft.y + baseForegroundHeight};
+    const auto baseVertices = makeQuadVerticesWithUv(spriteTopLeft,
+                                                     spriteTopRight,
+                                                     baseForegroundBottomRight,
+                                                     baseForegroundBottomLeft,
+                                                     0.0f,
+                                                     0.0f,
+                                                     1.0f,
+                                                     baseForegroundV1,
+                                                     depth01,
+                                                     1.0f,
+                                                     1.0f,
+                                                     1.0f,
+                                                     1.0f);
+    renderer.draw(GL_TRIANGLES, *texture, baseVertices.data(), baseVertices.size());
   }
-
-  const auto baseVertices = makeQuadVertices(spriteTopLeft,
-                                             spriteTopRight,
-                                             spriteBottomRight,
-                                             spriteBottomLeft,
-                                             depth01,
-                                             1.0f,
-                                             1.0f,
-                                             1.0f,
-                                             1.0f);
-  renderer.draw(GL_TRIANGLES,
-                *texture,
-                baseVertices.data(),
-                baseVertices.size(),
-                logicalDepthWithFootprint);
 
   if (instance.state != BuildingState::Complete) {
     return;
@@ -148,7 +461,7 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
 
   for (std::size_t layerIndex = 1; layerIndex < asset.completeLayers.size(); ++layerIndex) {
     const auto& layer = asset.completeLayers[layerIndex];
-    if (layer.textures.empty()) {
+    if (layer.role == BuildingAsset::LayerRole::UnderUnit || layer.textures.empty()) {
       continue;
     }
 
@@ -172,11 +485,7 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                                 1.0f,
                                                 1.0f,
                                                 1.0f);
-    renderer.draw(GL_TRIANGLES,
-                  *layerTexture,
-                  layerVertices.data(),
-                  layerVertices.size(),
-                  logicalDepthWithFootprint);
+    renderer.draw(GL_TRIANGLES, *layerTexture, layerVertices.data(), layerVertices.size());
   }
 }
 
@@ -202,7 +511,7 @@ void updateSidebarStateForDemo(SidebarState& sidebarState,
                                const int viewportHeight,
                                const std::uint32_t nowTicks) {
   sidebarState.visibleRowsHint = computeSidebarVisibleRows(sidebarAssets, viewportHeight);
-  sidebarState.tabVisible = {true, true, false, false};
+  sidebarState.tabVisible = {true, true, true, true};
   sidebarState.tabReady = {false, false, false, false};
 
   if (sidebarState.selectedTab != SidebarTab::Base &&
@@ -244,6 +553,7 @@ void tryPlaceSelectedBuilding(const float mouseX,
                               MapGrid& map,
                               std::vector<BuildingInstance>& buildings,
                               const BuildingAsset*& selectedBuildAsset,
+                              const int selectedBuildMaxHp,
                               BuildingPlacement& previewPlacement) {
   if (selectedBuildAsset == nullptr || mouseX >= viewportWidth - sidebarWidth) {
     return;
@@ -259,7 +569,14 @@ void tryPlaceSelectedBuilding(const float mouseX,
   const auto state = selectedBuildAsset->buildupTextures.empty()
                        ? BuildingState::Complete
                        : BuildingState::Constructing;
-  buildings.push_back(BuildingInstance{selectedBuildAsset->id, candidate, state, nowTicks});
+  buildings.push_back(BuildingInstance{
+    selectedBuildAsset->id,
+    candidate,
+    state,
+    nowTicks,
+    selectedBuildMaxHp,
+    selectedBuildMaxHp
+  });
   selectedBuildAsset = nullptr;
   previewPlacement = candidate;
 }
@@ -322,6 +639,121 @@ void buildRenderQueue(const BuildingAssetMap& buildingAssets,
     0.58f));
 }
 
+std::optional<std::size_t> hitTestBuildingAtPoint(const BuildingAssetMap& buildingAssets,
+                                                  const std::vector<BuildingInstance>& buildings,
+                                                  const float mouseX,
+                                                  const float mouseY,
+                                                  const Vec2 mapOrigin,
+                                                  const float tileWidth,
+                                                  const float tileHeight) {
+  std::optional<std::size_t> selectedIndex;
+  float selectedDepth = std::numeric_limits<float>::infinity();
+  const auto mouseTile = screenToIso(mouseX, mouseY, mapOrigin, tileWidth, tileHeight);
+
+  for (std::size_t index = 0; index < buildings.size(); ++index) {
+    const auto& building = buildings[index];
+    const auto footprint = foundationTiles(building.placement);
+    const bool containsMouseTile = std::any_of(footprint.begin(), footprint.end(), [&](const TileCoord coord) {
+      return coord.x == mouseTile.x && coord.y == mouseTile.y;
+    });
+    if (!containsMouseTile) {
+      continue;
+    }
+
+    const auto& asset = assetForInstance(buildingAssets, building);
+    const auto command = makeBuildingRenderCommand(asset, building, mapOrigin, tileWidth, tileHeight);
+    if (!selectedIndex.has_value() || command.depth01 < selectedDepth) {
+      selectedIndex = index;
+      selectedDepth = command.depth01;
+    }
+  }
+
+  return selectedIndex;
+}
+
+void drawBuildingHealthOverlay(Renderer2D& renderer,
+                               const BuildingAssetMap& buildingAssets,
+                               const std::vector<BuildingInstance>& buildings,
+                               const std::optional<std::size_t> buildingIndex,
+                               const bool showBone,
+                               const Vec2 mapOrigin,
+                               const float tileWidth,
+                               const float tileHeight) {
+  if (!buildingIndex.has_value() || *buildingIndex >= buildings.size()) {
+    return;
+  }
+
+  const auto& building = buildings[*buildingIndex];
+  if (building.maxHp <= 0) {
+    return;
+  }
+
+  const auto& asset = assetForInstance(buildingAssets, building);
+
+  if (showBone) {
+    drawSelectedBuildingBone(renderer, asset, building, mapOrigin, tileWidth, tileHeight);
+  }
+
+  const int maxBloodNum = std::max(1, building.maxHp / 100);
+  int currentBloodNum = building.hp <= 0 ? 0 : building.hp / 100;
+  if (building.hp > 0) {
+    currentBloodNum = std::max(1, currentBloodNum);
+  }
+  currentBloodNum = std::clamp(currentBloodNum, 0, maxBloodNum);
+
+  constexpr float kScale = 1.0f;
+  const int barWidth = 10 + (maxBloodNum - 1) * 4;
+  const int startX = barWidth - 6;
+  const Vec2 barOrigin = buildingHealthBarOrigin(asset, building, mapOrigin, tileWidth, tileHeight, barWidth);
+
+  const float hpRatio = std::clamp(static_cast<float>(building.hp) / static_cast<float>(building.maxHp), 0.0f, 1.0f);
+  BuildingHealthColors colors{
+    BarColor{0.0f, 50.0f / 255.0f, 0.0f, 1.0f},
+    BarColor{0.0f, 128.0f / 255.0f, 0.0f, 1.0f},
+    BarColor{0.0f, 1.0f, 0.0f, 1.0f}
+  };
+  if (hpRatio <= 0.25f) {
+    colors = BuildingHealthColors{
+      BarColor{134.0f / 255.0f, 17.0f / 255.0f, 34.0f / 255.0f, 1.0f},
+      BarColor{204.0f / 255.0f, 34.0f / 255.0f, 34.0f / 255.0f, 1.0f},
+      BarColor{238.0f / 255.0f, 68.0f / 255.0f, 51.0f / 255.0f, 1.0f}
+    };
+  } else if (hpRatio <= 0.5f) {
+    colors = BuildingHealthColors{
+      BarColor{50.0f / 255.0f, 50.0f / 255.0f, 0.0f, 1.0f},
+      BarColor{128.0f / 255.0f, 128.0f / 255.0f, 0.0f, 1.0f},
+      BarColor{1.0f, 1.0f, 0.0f, 1.0f}
+    };
+  }
+
+  int x = startX;
+  int y = 0;
+  for (int i = 0; i < currentBloodNum; ++i) {
+    drawFilledBuildingHealthPip(renderer,
+                                barOrigin,
+                                x,
+                                y,
+                                kScale,
+                                colors,
+                                i == 0,
+                                i == currentBloodNum - 1);
+    x -= 4;
+    y += 2;
+  }
+
+  const int emptyBloodNum = maxBloodNum - currentBloodNum;
+  for (int i = 0; i < emptyBloodNum; ++i) {
+    drawEmptyBuildingHealthPip(renderer,
+                               barOrigin,
+                               x,
+                               y,
+                               kScale,
+                               i == emptyBloodNum - 1);
+    x -= 4;
+    y += 2;
+  }
+}
+
 void redrawBuildingOccludersForRhino(Renderer2D& renderer,
                                      const BuildingAssetMap& buildingAssets,
                                      const std::vector<BuildingInstance>& buildings,
@@ -382,6 +814,7 @@ void redrawBuildingOccludersForRhino(Renderer2D& renderer,
     drawBuildingForegroundOverlay(renderer,
                                   *occluder.asset,
                                   occluder.instance,
+                                  rhinoUnit,
                                   mapOrigin,
                                   tileWidth,
                                   tileHeight,
@@ -390,4 +823,29 @@ void redrawBuildingOccludersForRhino(Renderer2D& renderer,
   }
 
   glDisable(GL_SCISSOR_TEST);
+}
+
+void drawWarFactoryOverUnitLayers(Renderer2D& renderer,
+                                  const BuildingAsset& asset,
+                                  const BuildingInstance& building,
+                                  const Vec2 mapOrigin,
+                                  const float tileWidth,
+                                  const float tileHeight,
+                                  const std::uint32_t nowTicks,
+                                  const float depth01) {
+  if (asset.id != "GAWEAP" || building.state != BuildingState::Complete) {
+    return;
+  }
+
+  RhinoUnitState dummyRhino;
+  renderer.beginUiPass();
+  drawBuildingForegroundOverlay(renderer,
+                                asset,
+                                building,
+                                dummyRhino,
+                                mapOrigin,
+                                tileWidth,
+                                tileHeight,
+                                nowTicks,
+                                depth01);
 }

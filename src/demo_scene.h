@@ -6,7 +6,9 @@
 #include "renderer2d.h"
 #include "sidebar.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 struct RhinoUnitState;
@@ -31,6 +33,7 @@ void tryPlaceSelectedBuilding(float mouseX,
                               MapGrid& map,
                               std::vector<BuildingInstance>& buildings,
                               const BuildingAsset*& selectedBuildAsset,
+                              int selectedBuildMaxHp,
                               BuildingPlacement& previewPlacement);
 
 void updatePreviewPlacementFromMouse(float mouseX,
@@ -55,6 +58,23 @@ void buildRenderQueue(const BuildingAssetMap& buildingAssets,
                       float tileHeight,
                       std::vector<BuildingRenderCommand>& renderQueue);
 
+[[nodiscard]] std::optional<std::size_t> hitTestBuildingAtPoint(const BuildingAssetMap& buildingAssets,
+                                                                const std::vector<BuildingInstance>& buildings,
+                                                                float mouseX,
+                                                                float mouseY,
+                                                                Vec2 mapOrigin,
+                                                                float tileWidth,
+                                                                float tileHeight);
+
+void drawBuildingHealthOverlay(Renderer2D& renderer,
+                               const BuildingAssetMap& buildingAssets,
+                               const std::vector<BuildingInstance>& buildings,
+                               std::optional<std::size_t> buildingIndex,
+                               bool showBone,
+                               Vec2 mapOrigin,
+                               float tileWidth,
+                               float tileHeight);
+
 void redrawBuildingOccludersForRhino(Renderer2D& renderer,
                                      const BuildingAssetMap& buildingAssets,
                                      const std::vector<BuildingInstance>& buildings,
@@ -66,3 +86,12 @@ void redrawBuildingOccludersForRhino(Renderer2D& renderer,
                                      int viewportHeight,
                                      float rhinoFootprintK,
                                      std::uint32_t nowTicks);
+
+void drawWarFactoryOverUnitLayers(Renderer2D& renderer,
+                                  const BuildingAsset& asset,
+                                  const BuildingInstance& building,
+                                  Vec2 mapOrigin,
+                                  float tileWidth,
+                                  float tileHeight,
+                                  std::uint32_t nowTicks,
+                                  float depth01);

@@ -22,9 +22,11 @@ DemoAppPaths locateDemoAppPaths(std::filesystem::path current) {
         current / "assets" / "buildings",
         current / "assets" / "palettes",
         current / "assets" / "icons" / "cameo",
-        current / "assets" / "ui" / "sidebar" / "sidec01",
+        current / "assets" / "ui" / "sidebar",
         current / "assets" / "ui" / "unit_overlays" / "common",
-        current / "assets" / "vehicles" / "rhino_tank"
+        current / "assets" / "vehicles" / "rhino_tank",
+        current / "assets" / "vehicles" / "allied_mcv",
+        current / "assets" / "vehicles" / "soviet_mcv"
       };
     }
 
@@ -35,6 +37,30 @@ DemoAppPaths locateDemoAppPaths(std::filesystem::path current) {
   }
 
   throw std::runtime_error("Could not locate project root containing assets/");
+}
+
+std::filesystem::path sidebarUiRootForFaction(const DemoAppPaths& paths, const BuildFaction faction) {
+  switch (faction) {
+    case BuildFaction::Allied: return paths.sidebarRoot / "sidec01";
+    case BuildFaction::Soviet: return paths.sidebarRoot / "sidec02";
+  }
+  return paths.sidebarRoot / "sidec01";
+}
+
+std::filesystem::path sidebarPalettePathForFaction(const DemoAppPaths& paths, const BuildFaction faction) {
+  switch (faction) {
+    case BuildFaction::Allied: return paths.paletteRoot / "ui" / "sidebar" / "sidec01.pal";
+    case BuildFaction::Soviet: return paths.paletteRoot / "ui" / "sidebar" / "sidec02.pal";
+  }
+  return paths.paletteRoot / "ui" / "sidebar" / "sidec01.pal";
+}
+
+std::filesystem::path mcvVoxelRootForFaction(const DemoAppPaths& paths, const BuildFaction faction) {
+  switch (faction) {
+    case BuildFaction::Allied: return paths.alliedMcvRoot;
+    case BuildFaction::Soviet: return paths.sovietMcvRoot;
+  }
+  return paths.alliedMcvRoot;
 }
 
 PaletteLibrary loadPaletteLibrary(const std::filesystem::path& paletteRoot) {
@@ -74,7 +100,8 @@ BuildingAssetMap buildAssetsForStyle(const std::filesystem::path& spriteRoot,
                             artIni,
                             paletteSet.unit,
                             paletteSet.terrain,
-                            style.theater);
+                            style.theater,
+                            style.faction);
 }
 
 BuildingAssetStyleKey makeBuildingAssetStyleKey(const DemoVisualStyle& style) {

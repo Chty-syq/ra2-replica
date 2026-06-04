@@ -6,6 +6,10 @@
 #include <limits>
 
 namespace {
+[[nodiscard]] bool defersOverUnitLayersUntilAfterUnits(const BuildingAsset& asset) {
+  return asset.id == "GAWEAP";
+}
+
 // 用于表达“相对锚点格”的辅助偏移函数。
 TileCoord offsetTile(const TileCoord anchor, const int dx, const int dy) {
   return TileCoord{anchor.x + dx, anchor.y + dy};
@@ -379,11 +383,15 @@ void drawBuildingInstance(Renderer2D& renderer,
   const UiTexture* texture = &asset.completeTexture;
   const DecodedFrame* frame = &asset.completeFrame;
 
-  if (instance.state == BuildingState::Constructing && !asset.buildupTextures.empty()) {
+  if ((instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing) &&
+      !asset.buildupTextures.empty()) {
     constexpr std::uint32_t kBuildupFrameDurationMs = 50;
-    const std::size_t frameIndex = std::min<std::size_t>(
+    const std::size_t elapsedFrame = std::min<std::size_t>(
       (nowTicks - instance.stateStartTicks) / kBuildupFrameDurationMs,
       asset.buildupTextures.size() - 1);
+    const std::size_t frameIndex = instance.state == BuildingState::Packing
+                                     ? asset.buildupTextures.size() - 1 - elapsedFrame
+                                     : elapsedFrame;
     texture = &asset.buildupTextures[frameIndex];
     frame = &asset.buildupFrames[frameIndex];
   }
@@ -397,11 +405,13 @@ void drawBuildingInstance(Renderer2D& renderer,
 
   // 阴影是刻意做得比较简化和风格化的。
   // 它并不追求物理正确，但在原型阶段能明显增强放置感和前后遮挡关系的可读性。
-  const float foundationScreenWidth = foundationContactSpan(instance.placement, tileWidth);
-  const Vec2 shadowTopLeft{foundationAnchor.x - foundationScreenWidth * 0.48f, foundationAnchor.y - tileHeight * 0.10f};
-  const Vec2 shadowTopRight{foundationAnchor.x + foundationScreenWidth * 0.32f, foundationAnchor.y - tileHeight * 0.22f};
-  const Vec2 shadowBottomRight{foundationAnchor.x + foundationScreenWidth * 0.58f, foundationAnchor.y + tileHeight * 0.12f};
-  const Vec2 shadowBottomLeft{foundationAnchor.x - foundationScreenWidth * 0.22f, foundationAnchor.y + tileHeight * 0.20f};
+  // Flat=yes 的维修厂/地台类建筑已经包含贴地接触阴影，跳过额外投影。
+  if (!asset.art.flat) {
+    const float foundationScreenWidth = foundationContactSpan(instance.placement, tileWidth);
+    const Vec2 shadowTopLeft{foundationAnchor.x - foundationScreenWidth * 0.48f, foundationAnchor.y - tileHeight * 0.10f};
+    const Vec2 shadowTopRight{foundationAnchor.x + foundationScreenWidth * 0.32f, foundationAnchor.y - tileHeight * 0.22f};
+    const Vec2 shadowBottomRight{foundationAnchor.x + foundationScreenWidth * 0.58f, foundationAnchor.y + tileHeight * 0.12f};
+    const Vec2 shadowBottomLeft{foundationAnchor.x - foundationScreenWidth * 0.22f, foundationAnchor.y + tileHeight * 0.20f};
 
   // 建筑本体现在已经是“按像素写深度”了，但阴影仍然是简化投影。
   // 如果让阴影也把统一深度写进 depth buffer，就可能在某些建筑像素上抢到
@@ -410,19 +420,20 @@ void drawBuildingInstance(Renderer2D& renderer,
   // 这里让阴影参与深度测试，但不写深度：
   // - 已经画在前面的其它物体仍然可以挡住阴影
   // - 当前建筑本体一定能在后续把阴影压回去
-  glDepthMask(GL_FALSE);
-  drawTexturedQuad(renderer,
-                   *texture,
-                   shadowTopLeft,
-                   shadowTopRight,
-                   shadowBottomRight,
-                   shadowBottomLeft,
-                   0.0f,
-                   0.0f,
-                   0.0f,
-                   0.34f * tintA,
-                   std::min(0.999f, depth01 + 0.0005f));
-  glDepthMask(GL_TRUE);
+    glDepthMask(GL_FALSE);
+    drawTexturedQuad(renderer,
+                     *texture,
+                     shadowTopLeft,
+                     shadowTopRight,
+                     shadowBottomRight,
+                     shadowBottomLeft,
+                     0.0f,
+                     0.0f,
+                     0.0f,
+                     0.34f * tintA,
+                     std::min(0.999f, depth01 + 0.0005f));
+    glDepthMask(GL_TRUE);
+  }
   const LogicalDepthParams logicalDepth{
     static_cast<float>(instance.placement.topLeft.x),
     static_cast<float>(instance.placement.topLeft.y),
@@ -448,22 +459,37 @@ void drawBuildingInstance(Renderer2D& renderer,
                                              tintG,
                                              tintB,
                                              tintA);
+  const bool drawingCompleteBaseLayer =
+    instance.state != BuildingState::Constructing && instance.state != BuildingState::Packing;
+  const bool baseLayerWritesDepth =
+    !drawingCompleteBaseLayer ||
+    asset.completeLayers.empty() ||
+    asset.completeLayers.front().role != BuildingAsset::LayerRole::UnderUnit;
+  if (!baseLayerWritesDepth) {
+    glDepthMask(GL_FALSE);
+  }
   renderer.draw(GL_TRIANGLES,
                 *texture,
                 baseVertices.data(),
                 baseVertices.size(),
                 logicalDepthWithFootprint);
+  if (!baseLayerWritesDepth) {
+    glDepthMask(GL_TRUE);
+  }
 
   // 预览态本质上是“完整建筑的半透明投影”，
   // 所以应该和 Complete 一样把后续附层一起画出来。
   // 只有建造中才只显示当前 build-up 帧，不叠完成态附层。
-  if (instance.state == BuildingState::Constructing) {
+  if (instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing) {
     return;
   }
 
   // 第 0 层已经作为基础层画过了，后面的层继续按顺序叠加。
   for (std::size_t layerIndex = 1; layerIndex < asset.completeLayers.size(); ++layerIndex) {
     const auto& layer = asset.completeLayers[layerIndex];
+    if (defersOverUnitLayersUntilAfterUnits(asset) && layer.role == BuildingAsset::LayerRole::OverUnit) {
+      continue;
+    }
     if (layer.textures.empty()) {
       continue;
     }
@@ -488,11 +514,18 @@ void drawBuildingInstance(Renderer2D& renderer,
                                                 tintG,
                                                 tintB,
                                                 tintA);
+    const bool layerWritesDepth = layer.role != BuildingAsset::LayerRole::UnderUnit;
+    if (!layerWritesDepth) {
+      glDepthMask(GL_FALSE);
+    }
     renderer.draw(GL_TRIANGLES,
                   *layerTexture,
                   layerVertices.data(),
                   layerVertices.size(),
                   logicalDepthWithFootprint);
+    if (!layerWritesDepth) {
+      glDepthMask(GL_TRUE);
+    }
   }
 }
 

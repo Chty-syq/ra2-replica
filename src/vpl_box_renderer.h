@@ -50,7 +50,13 @@ public:
   VplBoxRenderer& operator=(const VplBoxRenderer&) = delete;
 
   void initialize(SDL_Window* window);
+  void destroy();
   void loadRhinoAssets(const std::filesystem::path& voxelRoot, const VplFile& vpl);
+  void loadVehicleAssets(const std::filesystem::path& voxelRoot,
+                         const VplFile& vpl,
+                         const std::string& bodyStem,
+                         const std::string& turretStem = {},
+                         const std::string& barrelStem = {});
   void setPalette(const Palette& palette);
 
   void renderToScreen(const VplBoxRendererState& state, int drawableWidth, int drawableHeight);

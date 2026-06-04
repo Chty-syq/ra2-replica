@@ -27,6 +27,10 @@ struct ArtDefinition {
   std::optional<std::string> buildup;
   std::optional<std::string> bibShape;
   std::optional<std::string> idleAnim;
+  std::optional<std::string> deployingAnim;
+  std::optional<std::string> underDoorAnim;
+  std::optional<std::string> roofDeployingAnim;
+  std::optional<std::string> underRoofDoorAnim;
   std::optional<std::string> activeAnim;
   std::optional<std::string> activeAnimTwo;
   std::optional<std::string> activeAnimThree;
@@ -47,6 +51,7 @@ struct ArtDefinition {
   bool remapable = false;
   bool terrainPalette = false;
   bool shadow = false;
+  bool flat = false;
   bool activeAnimPowered = true;
 };
 

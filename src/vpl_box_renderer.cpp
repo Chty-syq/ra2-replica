@@ -702,13 +702,16 @@ struct VplBoxRenderer::Impl {
 };
 
 VplBoxRenderer::~VplBoxRenderer() {
+  destroy();
+}
+
+void VplBoxRenderer::destroy() {
   if (impl_ != nullptr) {
-    if (initialized_) {
-      impl_->destroy();
-    }
+    impl_->destroy();
     delete impl_;
     impl_ = nullptr;
   }
+  initialized_ = false;
 }
 
 void VplBoxRenderer::initialize(SDL_Window* window) {
@@ -781,45 +784,62 @@ void VplBoxRenderer::initialize(SDL_Window* window) {
 }
 
 void VplBoxRenderer::loadRhinoAssets(const std::filesystem::path& voxelRoot, const VplFile& vpl) {
+  loadVehicleAssets(voxelRoot, vpl, "htnk", "htnktur", "htnkbarl");
+}
+
+void VplBoxRenderer::loadVehicleAssets(const std::filesystem::path& voxelRoot,
+                                       const VplFile& vpl,
+                                       const std::string& bodyStem,
+                                       const std::string& turretStem,
+                                       const std::string& barrelStem) {
   if (!initialized_ || impl_ == nullptr) {
     throw std::runtime_error("Renderer must be initialized before loading assets");
+  }
+  if (bodyStem.empty()) {
+    throw std::runtime_error("Vehicle VXL body stem must not be empty");
   }
 
   impl_->destroyPart(impl_->body);
   impl_->destroyPart(impl_->turret);
   impl_->destroyPart(impl_->barrel);
 
-  const auto bodyVxl = VxlFile::load(voxelRoot / "htnk.vxl");
-  const auto turretVxl = VxlFile::load(voxelRoot / "htnktur.vxl");
-  const auto barrelVxl = VxlFile::load(voxelRoot / "htnkbarl.vxl");
+  const auto bodyVxl = VxlFile::load(voxelRoot / (bodyStem + ".vxl"));
 
   impl_->bodyNormalTypeIndex = bodyVxl.normalTypeIndex();
-  impl_->turretNormalTypeIndex = turretVxl.normalTypeIndex();
-  impl_->barrelNormalTypeIndex = barrelVxl.normalTypeIndex();
-
   const auto bodyNormalKind = detectVoxelNormalTableKind(impl_->bodyNormalTypeIndex);
-  const auto turretNormalKind = detectVoxelNormalTableKind(impl_->turretNormalTypeIndex);
-  const auto barrelNormalKind = detectVoxelNormalTableKind(impl_->barrelNormalTypeIndex);
-  const auto tsVotes = static_cast<int>(bodyNormalKind == VoxelNormalTableKind::TsIndex2) +
-                       static_cast<int>(turretNormalKind == VoxelNormalTableKind::TsIndex2) +
-                       static_cast<int>(barrelNormalKind == VoxelNormalTableKind::TsIndex2);
-  impl_->detectedNormalTableKind = tsVotes >= 2 ? VoxelNormalTableKind::TsIndex2 : VoxelNormalTableKind::Ra2Index4;
+  int tsVotes = static_cast<int>(bodyNormalKind == VoxelNormalTableKind::TsIndex2);
+  int normalVotes = 1;
 
   impl_->body = RhinoPartData{
     "body",
-    HvaFile::load(voxelRoot / "htnk.hva"),
+    HvaFile::load(voxelRoot / (bodyStem + ".hva")),
     buildSections(bodyVxl)
   };
-  impl_->turret = RhinoPartData{
-    "turret",
-    HvaFile::load(voxelRoot / "htnktur.hva"),
-    buildSections(turretVxl)
+  auto loadOptionalPart = [&](RhinoPartData& part,
+                              std::uint8_t& normalTypeIndex,
+                              const std::string& stem,
+                              const char* label) {
+    normalTypeIndex = 0;
+    if (stem.empty()) {
+      part = RhinoPartData{};
+      return;
+    }
+
+    const auto vxl = VxlFile::load(voxelRoot / (stem + ".vxl"));
+    normalTypeIndex = vxl.normalTypeIndex();
+    const auto normalKind = detectVoxelNormalTableKind(normalTypeIndex);
+    tsVotes += static_cast<int>(normalKind == VoxelNormalTableKind::TsIndex2);
+    ++normalVotes;
+    part = RhinoPartData{
+      label,
+      HvaFile::load(voxelRoot / (stem + ".hva")),
+      buildSections(vxl)
+    };
   };
-  impl_->barrel = RhinoPartData{
-    "barrel",
-    HvaFile::load(voxelRoot / "htnkbarl.hva"),
-    buildSections(barrelVxl)
-  };
+  loadOptionalPart(impl_->turret, impl_->turretNormalTypeIndex, turretStem, "turret");
+  loadOptionalPart(impl_->barrel, impl_->barrelNormalTypeIndex, barrelStem, "barrel");
+  impl_->detectedNormalTableKind =
+    tsVotes * 2 >= normalVotes ? VoxelNormalTableKind::TsIndex2 : VoxelNormalTableKind::Ra2Index4;
 
   if (impl_->gl.vplTexture != 0) {
     glDeleteTextures(1, &impl_->gl.vplTexture);

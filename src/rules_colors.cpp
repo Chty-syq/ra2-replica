@@ -1,6 +1,7 @@
 #include "rules_colors.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 namespace {
 std::string trim(std::string value) {
@@ -178,4 +180,55 @@ HouseColorSet loadHouseColors(const std::filesystem::path& rulesIniPath) {
   }
 
   return result;
+}
+
+std::unordered_map<std::string, int> loadObjectStrengths(const std::filesystem::path& rulesIniPath) {
+  std::ifstream input(rulesIniPath);
+  if (!input) {
+    throw std::runtime_error("Failed to open rules.ini: " + rulesIniPath.string());
+  }
+
+  std::unordered_map<std::string, int> strengths;
+  std::string currentSection;
+  std::string line;
+  while (std::getline(input, line)) {
+    const auto comment = line.find(';');
+    if (comment != std::string::npos) {
+      line = line.substr(0, comment);
+    }
+    line = trim(line);
+    if (line.empty()) {
+      continue;
+    }
+
+    if (line.front() == '[' && line.back() == ']') {
+      currentSection = trim(line.substr(1, line.size() - 2));
+      continue;
+    }
+
+    if (currentSection.empty()) {
+      continue;
+    }
+
+    const auto eq = line.find('=');
+    if (eq == std::string::npos) {
+      continue;
+    }
+
+    const auto key = trim(line.substr(0, eq));
+    const auto value = trim(line.substr(eq + 1));
+    if (!iequals(key, "Strength")) {
+      continue;
+    }
+
+    try {
+      const int strength = std::stoi(value);
+      if (strength > 0) {
+        strengths[currentSection] = strength;
+      }
+    } catch (...) {
+    }
+  }
+
+  return strengths;
 }

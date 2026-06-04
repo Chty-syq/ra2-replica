@@ -109,6 +109,14 @@ ArtDefinition ArtIni::building(std::string id) const {
       definition.foundation = parseFoundation(value);
     } else if (iequals(key, "IdleAnim")) {
       definition.idleAnim = value;
+    } else if (iequals(key, "DeployingAnim")) {
+      definition.deployingAnim = value;
+    } else if (iequals(key, "UnderDoorAnim")) {
+      definition.underDoorAnim = value;
+    } else if (iequals(key, "RoofDeployingAnim")) {
+      definition.roofDeployingAnim = value;
+    } else if (iequals(key, "UnderRoofDoorAnim")) {
+      definition.underRoofDoorAnim = value;
     } else if (iequals(key, "ActiveAnim")) {
       definition.activeAnim = value;
     } else if (iequals(key, "ActiveAnimTwo")) {
@@ -151,6 +159,8 @@ ArtDefinition ArtIni::building(std::string id) const {
       definition.terrainPalette = parseBool(value);
     } else if (iequals(key, "Shadow")) {
       definition.shadow = parseBool(value);
+    } else if (iequals(key, "Flat")) {
+      definition.flat = parseBool(value);
     } else if (iequals(key, "ActiveAnimPowered")) {
       definition.activeAnimPowered = parseBool(value);
     }

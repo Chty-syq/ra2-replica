@@ -45,6 +45,7 @@ struct RhinoUnitState {
   TileCoord steeringTarget{7, 10};
   int steeringDirectionIndex = 0;
   bool hasPendingMove = false;
+  bool finishPathBeforePendingMove = false;
   TileCoord pendingMoveTarget{7, 10};
   std::uint32_t waypointVisibleUntilTicks = 0;
 };
@@ -70,6 +71,10 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, float deltaSeconds);
                                          std::uint32_t nowTicks);
 
 [[nodiscard]] int rhinoDirectionIndex(const RhinoUnitState& unit);
+void setRhinoDirectionIndex(RhinoUnitState& unit, int directionIndex);
+[[nodiscard]] bool rotateRhinoTowardDirectionIndex(RhinoUnitState& unit,
+                                                   int directionIndex,
+                                                   float deltaSeconds);
 
 void drawRhinoHealthBar(Renderer2D& renderer,
                         const RhinoUnitUiAssets& assets,

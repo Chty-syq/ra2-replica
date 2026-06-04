@@ -41,9 +41,11 @@ struct DemoAppPaths {
   std::filesystem::path buildingRoot;
   std::filesystem::path paletteRoot;
   std::filesystem::path iconRoot;
-  std::filesystem::path sidebarUiRoot;
+  std::filesystem::path sidebarRoot;
   std::filesystem::path unitOverlayRoot;
   std::filesystem::path rhinoRoot;
+  std::filesystem::path alliedMcvRoot;
+  std::filesystem::path sovietMcvRoot;
 };
 
 using BuildingAssetStyleKey = std::uint64_t;
@@ -57,6 +59,9 @@ struct BuildingAssetCache {
 void configureOpenGlContext();
 
 [[nodiscard]] DemoAppPaths locateDemoAppPaths(std::filesystem::path current);
+[[nodiscard]] std::filesystem::path sidebarUiRootForFaction(const DemoAppPaths& paths, BuildFaction faction);
+[[nodiscard]] std::filesystem::path sidebarPalettePathForFaction(const DemoAppPaths& paths, BuildFaction faction);
+[[nodiscard]] std::filesystem::path mcvVoxelRootForFaction(const DemoAppPaths& paths, BuildFaction faction);
 [[nodiscard]] PaletteLibrary loadPaletteLibrary(const std::filesystem::path& paletteRoot);
 [[nodiscard]] const TheaterPaletteSet& palettesForTheater(const PaletteLibrary& library,
                                                           TheaterStyle theater);

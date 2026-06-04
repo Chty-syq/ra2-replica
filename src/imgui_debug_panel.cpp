@@ -32,6 +32,14 @@ bool gDebugPanelInitialized = false;
   return u8"温带";
 }
 
+[[nodiscard]] const char* factionLabel(const BuildFaction faction) {
+  switch (faction) {
+    case BuildFaction::Allied: return u8"盟军";
+    case BuildFaction::Soviet: return u8"苏军";
+  }
+  return u8"盟军";
+}
+
 [[nodiscard]] ImVec4 toImGuiColor(const Rgba color) {
   return ImVec4(color.r / 255.0f,
                 color.g / 255.0f,
@@ -297,7 +305,7 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
   if (ImGui::Begin(u8"调试面板", nullptr, kWindowFlags)) {
     ImGui::BeginChild("##PanelScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-    if (beginSection(u8"场景")) {
+    if (beginSection(u8"场景设置")) {
       ImGui::TextUnformatted(u8"国家色");
       const auto metrics =
         computeHouseColorGridMetrics(ImGui::GetContentRegionAvail().x, houseColors.colors.size());
@@ -307,6 +315,18 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
                         ImGuiWindowFlags_NoScrollbar);
       drawHouseColorSwatches(state.style.houseColorIndex, houseColors);
       ImGui::EndChild();
+
+      ImGui::Spacing();
+      ImGui::TextUnformatted(u8"阵营");
+      for (std::size_t index = 0; index < std::size(kAllBuildFactions); ++index) {
+        const BuildFaction faction = kAllBuildFactions[index];
+        if (index > 0) {
+          ImGui::SameLine();
+        }
+        if (ImGui::RadioButton(factionLabel(faction), state.style.faction == faction)) {
+          state.style.faction = faction;
+        }
+      }
 
       ImGui::Spacing();
       ImGui::TextUnformatted(u8"剧场风格");
@@ -321,27 +341,33 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
       }
     }
 
-    if (beginSection(u8"显示与节奏")) {
-      int resolutionIndex = static_cast<int>(state.display.resolutionIndex);
-      const auto safeResolutionIndex =
-        std::clamp(resolutionIndex, 0, static_cast<int>(std::size(kDisplayResolutionOptions) - 1));
-      if (ImGui::BeginCombo(u8"分辨率", kDisplayResolutionOptions[safeResolutionIndex].label)) {
-        for (int index = 0; index < static_cast<int>(std::size(kDisplayResolutionOptions)); ++index) {
-          const bool selected = safeResolutionIndex == index;
-          if (ImGui::Selectable(kDisplayResolutionOptions[index].label, selected)) {
-            resolutionIndex = index;
-          }
-          if (selected) {
-            ImGui::SetItemDefaultFocus();
-          }
+    int resolutionIndex = static_cast<int>(state.display.resolutionIndex);
+    const auto safeResolutionIndex =
+      std::clamp(resolutionIndex, 0, static_cast<int>(std::size(kDisplayResolutionOptions) - 1));
+    if (ImGui::BeginCombo(u8"分辨率", kDisplayResolutionOptions[safeResolutionIndex].label)) {
+      for (int index = 0; index < static_cast<int>(std::size(kDisplayResolutionOptions)); ++index) {
+        const bool selected = safeResolutionIndex == index;
+        if (ImGui::Selectable(kDisplayResolutionOptions[index].label, selected)) {
+          resolutionIndex = index;
         }
-        ImGui::EndCombo();
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
+        }
       }
-      state.display.resolutionIndex =
-        static_cast<std::size_t>(std::clamp(resolutionIndex, 0, static_cast<int>(std::size(kDisplayResolutionOptions) - 1)));
-
-      ImGui::SliderFloat(u8"游戏速度", &state.gameplay.speedMultiplier, 0.25f, 3.0f, "%.2fx");
+      ImGui::EndCombo();
     }
+    state.display.resolutionIndex = static_cast<std::size_t>(std::clamp(resolutionIndex, 0, static_cast<int>(std::size(kDisplayResolutionOptions) - 1)));
+    ImGui::SliderFloat(u8"游戏速度", &state.gameplay.speedMultiplier, 0.25f, 3.0f, "%.2fx");
+
+    const float fps = ImGui::GetIO().Framerate;
+    const float frameMs = 1000.0f / std::max(fps, 0.001f);
+    const ImVec4 fpsColor = fps >= 55.0f
+                                ? ImVec4(0.48f, 0.92f, 0.62f, 1.0f)
+                                : (fps >= 30.0f
+                                ? ImVec4(0.95f, 0.78f, 0.35f, 1.0f)
+                                : ImVec4(0.95f, 0.36f, 0.32f, 1.0f));
+    ImGui::TextColored(fpsColor, u8"当前帧率: %.1f FPS / %.2f ms", fps, frameMs);
+    ImGui::Spacing();
 
     if (beginSection(u8"渲染参数")) {
       ImGui::TextUnformatted(u8"法线表");

@@ -15,13 +15,21 @@ enum class TheaterStyle {
   Urban
 };
 
+enum class BuildFaction {
+  Allied,
+  Soviet
+};
+
 struct DemoVisualStyle {
+  BuildFaction faction = BuildFaction::Allied;
   TheaterStyle theater = TheaterStyle::Temperate;
   std::size_t houseColorIndex = 0;
 };
 
 [[nodiscard]] inline bool sameVisualStyle(const DemoVisualStyle& lhs, const DemoVisualStyle& rhs) {
-  return lhs.theater == rhs.theater && lhs.houseColorIndex == rhs.houseColorIndex;
+  return lhs.faction == rhs.faction &&
+         lhs.theater == rhs.theater &&
+         lhs.houseColorIndex == rhs.houseColorIndex;
 }
 
 struct HouseColorEntry {
@@ -39,6 +47,11 @@ inline constexpr std::array<TheaterStyle, 3> kAllTheaterStyles{
   TheaterStyle::Temperate,
   TheaterStyle::Snow,
   TheaterStyle::Urban
+};
+
+inline constexpr std::array<BuildFaction, 2> kAllBuildFactions{
+  BuildFaction::Allied,
+  BuildFaction::Soviet
 };
 
 [[nodiscard]] inline std::string_view theaterShortName(const TheaterStyle theater) {

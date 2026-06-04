@@ -339,6 +339,26 @@ void destroyTextures(std::vector<UiTexture>& textures) {
   return true;
 }
 
+void applyPendingMoveAfterWaypoint(RhinoUnitState& unit, MapGrid& map) {
+  if (!unit.hasPendingMove) {
+    if (unit.path.empty()) {
+      unit.finishPathBeforePendingMove = false;
+    }
+    unit.steeringTarget = unit.occupiedCell;
+    return;
+  }
+
+  if (unit.finishPathBeforePendingMove && !unit.path.empty()) {
+    unit.steeringTarget = unit.occupiedCell;
+    return;
+  }
+
+  const TileCoord pendingTarget = unit.pendingMoveTarget;
+  unit.hasPendingMove = false;
+  unit.finishPathBeforePendingMove = false;
+  planRhinoMoveFromCurrentCell(unit, map, pendingTarget);
+}
+
 [[nodiscard]] int quantizeDirectionIndex(const float radians) {
   const float wrapped = normalizeAngle(radians);
   const float normalized = (wrapped < 0.0f ? wrapped + 2.0f * kPi : wrapped) / (2.0f * kPi);
@@ -443,6 +463,7 @@ void initializeRhinoUnit(RhinoUnitState& unit, MapGrid& map, const TileCoord sta
   unit.steeringTarget = startCell;
   unit.steeringDirectionIndex = 0;
   unit.hasPendingMove = false;
+  unit.finishPathBeforePendingMove = false;
   unit.pendingMoveTarget = startCell;
   unit.waypointVisibleUntilTicks = 0;
   map.setOccupied(std::vector<TileCoord>{startCell}, true);
@@ -478,13 +499,7 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, const float deltaSecond
     map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, true);
     unit.tilePosition = Vec2{static_cast<float>(targetCellModern.x), static_cast<float>(targetCellModern.y)};
     unit.path.erase(unit.path.begin());
-    if (unit.hasPendingMove) {
-      const TileCoord pendingTarget = unit.pendingMoveTarget;
-      unit.hasPendingMove = false;
-      planRhinoMoveFromCurrentCell(unit, map, pendingTarget);
-    } else {
-      unit.steeringTarget = unit.occupiedCell;
-    }
+    applyPendingMoveAfterWaypoint(unit, map);
     return;
   }
 
@@ -528,13 +543,7 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, const float deltaSecond
     map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, true);
     unit.tilePosition = Vec2{static_cast<float>(targetCellModern.x), static_cast<float>(targetCellModern.y)};
     unit.path.erase(unit.path.begin());
-    if (unit.hasPendingMove) {
-      const TileCoord pendingTarget = unit.pendingMoveTarget;
-      unit.hasPendingMove = false;
-      planRhinoMoveFromCurrentCell(unit, map, pendingTarget);
-    } else {
-      unit.steeringTarget = unit.occupiedCell;
-    }
+    applyPendingMoveAfterWaypoint(unit, map);
   }
   return;
 
@@ -592,6 +601,7 @@ bool issueRhinoMoveCommand(RhinoUnitState& unit,
   }
 
   unit.hasPendingMove = false;
+  unit.finishPathBeforePendingMove = false;
   if (!planRhinoMoveFromCurrentCell(unit, map, targetCell)) {
     return false;
   }
@@ -601,6 +611,20 @@ bool issueRhinoMoveCommand(RhinoUnitState& unit,
 
 int rhinoDirectionIndex(const RhinoUnitState& unit) {
   return quantizeDirectionIndex(unit.headingRadians);
+}
+
+void setRhinoDirectionIndex(RhinoUnitState& unit, const int directionIndex) {
+  unit.headingRadians = directionIndexToHeadingRadians(directionIndex);
+}
+
+bool rotateRhinoTowardDirectionIndex(RhinoUnitState& unit,
+                                     const int directionIndex,
+                                     const float deltaSeconds) {
+  const float desiredHeading = directionIndexToHeadingRadians(directionIndex);
+  unit.headingRadians = rotateToward(unit.headingRadians,
+                                     desiredHeading,
+                                     kTurnSpeedRadiansPerSecond * std::max(0.0f, deltaSeconds));
+  return std::fabs(normalizeAngle(desiredHeading - unit.headingRadians)) <= 0.01f;
 }
 
 void drawRhinoHealthBar(Renderer2D& renderer,

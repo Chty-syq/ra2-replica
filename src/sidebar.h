@@ -1,5 +1,6 @@
 #pragma once
 
+#include "demo_style.h"
 #include "palette.h"
 #include "renderer2d.h"
 #include "ui_texture.h"
@@ -72,7 +73,8 @@ struct SidebarAssets {
 SidebarAssets loadSidebarAssets(const std::filesystem::path& uiSpriteRoot,
                                 const std::filesystem::path& cameoSpriteRoot,
                                 const Palette& sidebarPalette,
-                                const Palette& cameoPalette);
+                                const Palette& cameoPalette,
+                                BuildFaction faction);
 void destroySidebarAssets(SidebarAssets& assets);
 
 int computeSidebarVisibleRows(const SidebarAssets& assets, int viewportHeight);

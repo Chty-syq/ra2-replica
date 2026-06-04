@@ -28,6 +28,7 @@ add_executable(ra2_power_demo
   src/demo_scene.cpp
   src/gl_loader.cpp
   src/imgui_debug_panel.cpp
+  src/iso_grid_renderer.cpp
   src/iso_world.cpp
   src/map_grid.cpp
   src/palette.cpp

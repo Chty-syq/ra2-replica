@@ -13,7 +13,7 @@
 #include <utility>
 
 namespace {
-constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kBuildableIconToBuilding{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kAlliedBuildableIconToBuilding{{
   {"powricon", "GAPOWR"},
   {"reficon", "GAREFN"},
   {"brrkicon", "GAPILE"},
@@ -31,6 +31,34 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kBuildab
   {"csphicon", "GACSPH"},
   {"wethicon", "GAWETH"}
 }};
+
+constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kSovietBuildableIconToBuilding{{
+  {"npwricon", "NAPOWR"},
+  {"nreficon", "NAREFN"},
+  {"handicon", "NAHAND"},
+  {"nwepicon", "NAWEAP"},
+  {"nradicon", "NARADR"},
+  {"yardicon", "NAYARD"},
+  {"rfixicon", "NADEPT"},
+  {"ntchicon", "NATECH"},
+  {"nrcticon", "NANRCT"},
+  {"nwalicon", "NAWALL"},
+  {"flakicon", "NAFLAK"},
+  {"samicon", "NASAM"},
+  {"tslaicon", "NATSLA"},
+  {"ironicon", "NAIRON"},
+  {"nukeicon", "NAMISL"},
+  {"npsiicon", "NAPSIS"}
+}};
+
+template <typename Fn>
+void forEachBuildableIconMapping(const BuildFaction faction, Fn&& fn) {
+  const auto& mappings =
+    (faction == BuildFaction::Soviet) ? kSovietBuildableIconToBuilding : kAlliedBuildableIconToBuilding;
+  for (const auto& [iconId, buildingId] : mappings) {
+    fn(iconId, buildingId);
+  }
+}
 
 [[nodiscard]] GLuint uploadIndexedTexture(const int width,
                                           const int height,
@@ -202,6 +230,7 @@ void attachLogicalCoordTexture(UiTexture& texture,
 struct LayerSpec {
   std::string spriteName;
   std::optional<std::string> animationId;
+  BuildingAsset::LayerRole role = BuildingAsset::LayerRole::Normal;
 };
 
 [[nodiscard]] std::string resolveTheaterVariant(const std::filesystem::path& spriteRoot,
@@ -294,15 +323,17 @@ struct LayerSpec {
   const auto bibName = art.bibShape.has_value() ? toLowerAscii(*art.bibShape) : std::string{};
 
   std::vector<LayerSpec> specs;
-  auto addStatic = [&](std::string layerName) {
+  auto addStatic = [&](std::string layerName,
+                       const BuildingAsset::LayerRole role = BuildingAsset::LayerRole::Normal) {
     layerName = toLowerAscii(std::move(layerName));
     if (!layerName.empty()) {
-      specs.push_back(LayerSpec{std::move(layerName), std::nullopt});
+      specs.push_back(LayerSpec{std::move(layerName), std::nullopt, role});
     }
   };
-  auto addAnimated = [&](const std::optional<std::string>& animationId) {
+  auto addAnimated = [&](const std::optional<std::string>& animationId,
+                         const BuildingAsset::LayerRole role = BuildingAsset::LayerRole::Normal) {
     if (animationId.has_value() && !animationId->empty()) {
-      specs.push_back(LayerSpec{"", *animationId});
+      specs.push_back(LayerSpec{"", *animationId, role});
     }
   };
 
@@ -345,12 +376,19 @@ struct LayerSpec {
     return specs;
   }
   if (buildingId == "GAWEAP") {
+    // GAWEAP is assembled from same-canvas component SHPs. Drawing gaweap.shp
+    // as an extra base layer duplicates the factory exit ramp and breaks unit occlusion.
+    addStatic(baseName + "_1", BuildingAsset::LayerRole::UnderUnit);
+    addStatic(baseName + "_2", BuildingAsset::LayerRole::OverUnit);
+    addAnimated(art.activeAnim, BuildingAsset::LayerRole::OverUnit);
+    addAnimated(art.activeAnimTwo, BuildingAsset::LayerRole::OverUnit);
+    addStatic(bibName, BuildingAsset::LayerRole::UnderUnit);
+    return specs;
+  }
+  if (buildingId == "NAWEAP") {
     addStatic(baseName);
-    addStatic(baseName + "_2");
-    addStatic(baseName + "_1");
-    addAnimated(art.activeAnimTwo);
-    addAnimated(art.activeAnim);
-    addStatic(bibName);
+    addStatic(bibName, BuildingAsset::LayerRole::UnderUnit);
+    addAnimated(art.activeAnim, BuildingAsset::LayerRole::OverUnit);
     return specs;
   }
   if (buildingId == "GAAIRC") {
@@ -367,9 +405,23 @@ struct LayerSpec {
     addAnimated(art.productionAnim);
     return specs;
   }
+  if (buildingId == "NAYARD") {
+    addStatic(baseName);
+    addAnimated(art.activeAnimThree);
+    // 船厂的 SpecialAnim 是停靠/离港状态动画，不能在完整态全部叠加。
+    addAnimated(art.productionAnim);
+    return specs;
+  }
   if (buildingId == "GADEPT") {
     addStatic(baseName);
     addStatic(bibName);
+    addAnimated(art.idleAnim);
+    return specs;
+  }
+  if (buildingId == "NADEPT") {
+    addStatic(baseName);
+    addStatic(bibName);
+    // 维修臂的 C1/C2/C3 是伸出、工作、收回状态；常驻完整态只保留底座工作动画。
     addAnimated(art.idleAnim);
     return specs;
   }
@@ -510,6 +562,11 @@ struct LayerSpec {
   if (normalizedAnimationId == "gadept_d" && frameIndices.size() > 1) {
     frameIndices.resize(1);
   }
+  if ((normalizedAnimationId == "gayard_d" || normalizedAnimationId == "nayard_d") &&
+      frameIndices.size() > 1) {
+    // ProductionAnim 是一次性生产状态动画；完整态先固定首帧，避免吊钩常驻循环和无谓加载大帧序列。
+    frameIndices.resize(1);
+  }
   if (normalizedAnimationId == "gaorep_a" && frameIndices.size() > 8) {
     frameIndices.resize(8);
   }
@@ -561,6 +618,7 @@ struct LayerSpec {
                                      theater,
                                      art.newTheater);
       if (!layer.textures.empty()) {
+        layer.role = spec.role;
         layers.push_back(std::move(layer));
       }
       continue;
@@ -575,12 +633,14 @@ struct LayerSpec {
       continue;
     }
 
-    layers.push_back(loadStaticLayer(spriteRoot,
-                                     spec.spriteName,
-                                     paletteKind,
-                                     paletteRemap,
-                                     theater,
-                                     art.newTheater));
+    auto layer = loadStaticLayer(spriteRoot,
+                                 spec.spriteName,
+                                 paletteKind,
+                                 paletteRemap,
+                                 theater,
+                                 art.newTheater);
+    layer.role = spec.role;
+    layers.push_back(std::move(layer));
   }
 
   return layers;
@@ -685,12 +745,13 @@ BuildingAssetMap loadBuildingAssets(const std::filesystem::path& spriteRoot,
                                     const ArtIni& artIni,
                                     const Palette& unitPalette,
                                     const Palette& terrainPalette,
-                                    const TheaterStyle theater) {
+                                    const TheaterStyle theater,
+                                    const BuildFaction faction) {
   BuildingAssetMap assets;
-  for (const auto& [_, buildingId] : kBuildableIconToBuilding) {
+  forEachBuildableIconMapping(faction, [&](const std::string_view, const std::string_view buildingId) {
     const std::string key(buildingId);
     if (assets.find(key) != assets.end()) {
-      continue;
+      return;
     }
 
     assets.emplace(key,
@@ -700,7 +761,7 @@ BuildingAssetMap loadBuildingAssets(const std::filesystem::path& spriteRoot,
                                      terrainPalette,
                                      theater,
                                      key));
-  }
+  });
   return assets;
 }
 
@@ -718,11 +779,15 @@ BuildingAsset loadBuildingAssetById(const std::filesystem::path& spriteRoot,
                            buildingId);
 }
 
-std::optional<std::string> buildingIdForIcon(const std::string_view iconId) {
-  for (const auto& [icon, building] : kBuildableIconToBuilding) {
-    if (iconId == icon) {
-      return std::string(building);
+std::optional<std::string> buildingIdForIcon(const std::string_view iconId, const BuildFaction faction) {
+  std::optional<std::string> result;
+  forEachBuildableIconMapping(faction, [&](const std::string_view icon, const std::string_view building) {
+    if (!result.has_value() && iconId == icon) {
+      result = std::string(building);
     }
+  });
+  if (result.has_value()) {
+    return result;
   }
   return std::nullopt;
 }

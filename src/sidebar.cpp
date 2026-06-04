@@ -161,7 +161,7 @@ Rect localToSidebar(const SidebarLayout& layout, const float sidebarTop, const R
 Rect repairRect(const SidebarLayout& layout, const SidebarAssets& assets) {
   return localToSidebar(layout,
                         layout.side1Y,
-                        Rect{20.0f,
+                        Rect{assets.repairFrames[0].width <= 52 ? 32.0f : 20.0f,
                              8.0f,
                              static_cast<float>(assets.repairFrames[0].width),
                              static_cast<float>(assets.repairFrames[0].height)});
@@ -176,16 +176,26 @@ Rect sellRect(const SidebarLayout& layout, const SidebarAssets& assets) {
                              static_cast<float>(assets.sellFrames[0].height)});
 }
 
+std::array<float, 4> tabXOffsets(const SidebarAssets& assets) {
+  const float tabWidth = static_cast<float>(assets.tabFrames[0][0].width);
+  if (tabWidth >= 32.0f) {
+    return {20.0f, 52.0f, 84.0f, 116.0f};
+  }
+  return {26.0f, 55.0f, 84.0f, 113.0f};
+}
+
+float tabY(const SidebarAssets&, const SidebarTab) {
+  return 40.0f;
+}
+
 Rect tabRect(const SidebarLayout& layout, const SidebarAssets& assets, const SidebarTab tab) {
-  constexpr std::array<float, 4> xOffsets{26.0f, 55.0f, 84.0f, 113.0f};
-  const bool usesTallLabel = (tab == SidebarTab::Infantry || tab == SidebarTab::Vehicles);
+  const auto xOffsets = tabXOffsets(assets);
   return localToSidebar(layout,
                         layout.side1Y,
                         Rect{xOffsets[tabIndex(tab)],
-                             38.0f,
+                             tabY(assets, tab),
                              static_cast<float>(assets.tabFrames[tabIndex(tab)][0].width),
-                             usesTallLabel ? 32.0f
-                                           : static_cast<float>(assets.tabFrames[tabIndex(tab)][0].height)});
+                             static_cast<float>(assets.tabFrames[tabIndex(tab)][0].height)});
 }
 
 Rect tabDrawRect(const SidebarLayout& layout, const SidebarAssets& assets, const SidebarTab tab) {
@@ -297,7 +307,8 @@ UiTexture composeSide1Texture(const SidebarAssets& assets, const SidebarState& s
 
   const auto& repair = state.repairSelected ? assets.repairFrames[1] : assets.repairFrames[0];
   const auto& sell = state.sellSelected ? assets.sellFrames[1] : assets.sellFrames[0];
-  blitRgba(rgba, assets.side1.width, assets.side1.height, repair.rgba, repair.width, repair.height, 20, 8);
+  const int repairX = assets.repairFrames[0].width <= 52 ? 32 : 20;
+  blitRgba(rgba, assets.side1.width, assets.side1.height, repair.rgba, repair.width, repair.height, repairX, 8);
   blitRgba(rgba, assets.side1.width, assets.side1.height, sell.rgba, sell.width, sell.height, 84, 8);
 
   for (const auto tab : {SidebarTab::Base, SidebarTab::Defense, SidebarTab::Infantry, SidebarTab::Vehicles}) {
@@ -315,12 +326,10 @@ UiTexture composeSide1Texture(const SidebarAssets& assets, const SidebarState& s
       texture = (tab == state.selectedTab) ? &frames[1] : &frames[0];
     }
 
-    int localX = 26 + static_cast<int>(tabIndex(tab)) * 29;
-    if (tab == SidebarTab::Infantry || tab == SidebarTab::Vehicles) {
-      blitRgba(rgba, assets.side1.width, assets.side1.height, texture->rgba, texture->width, texture->height, localX, 40);
-    } else {
-      blitRgba(rgba, assets.side1.width, assets.side1.height, texture->rgba, texture->width, texture->height, localX, 38);
-    }
+    const auto xOffsets = tabXOffsets(assets);
+    const int localX = static_cast<int>(xOffsets[tabIndex(tab)]);
+    const int localY = static_cast<int>(tabY(assets, tab));
+    blitRgba(rgba, assets.side1.width, assets.side1.height, texture->rgba, texture->width, texture->height, localX, localY);
   }
 
   return uploadTexture(assets.side1.width, assets.side1.height, rgba);
@@ -361,6 +370,86 @@ UiTexture loadOptionalCameo(const std::filesystem::path& cameoSpriteRoot,
     return makeBlankTexture(60, 48);
   }
   return loadShpFrameTexture(*path, cameoPalette, 0, true);
+}
+
+template <typename Fn>
+void forEachPanelIconName(const BuildFaction faction, const SidebarTab tab, Fn&& fn) {
+  switch (faction) {
+    case BuildFaction::Allied:
+      switch (tab) {
+        case SidebarTab::Base:
+          for (const auto* name : {
+                 "powricon", "reficon", "brrkicon", "gwepicon", "heliicon",
+                 "ayaricon", "fixicon", "techicon", "gorep"
+               }) {
+            fn(name);
+          }
+          return;
+        case SidebarTab::Defense:
+          for (const auto* name : {
+                 "paraicon", "aparicon", "chroicon", "bolticon", "wallicon",
+                 "pillicon", "samicon", "prisicon", "gapicon", "gcanicon",
+                 "asaticon", "csphicon", "wethicon"
+               }) {
+            fn(name);
+          }
+          return;
+        case SidebarTab::Infantry:
+          for (const auto* name : {
+                 "giicon", "engnicon", "adogicon", "jjeticon", "snipicon",
+                 "spyicon", "sealicon", "tanyicon", "clegicon"
+               }) {
+            fn(name);
+          }
+          return;
+        case SidebarTab::Vehicles:
+          for (const auto* name : {
+                 "ahrvicon", "gtnkicon", "fvicon", "tnkdicon", "beagicon",
+                 "sreficon", "rtnkicon", "mcvicon", "falcicon", "shadicon",
+                 "landicon", "desticon", "dlphicon", "agisicon", "carricon"
+               }) {
+            fn(name);
+          }
+          return;
+      }
+      return;
+    case BuildFaction::Soviet:
+      switch (tab) {
+        case SidebarTab::Base:
+          for (const auto* name : {
+                 "npwricon", "nreficon", "handicon", "nwepicon", "nradicon",
+                 "yardicon", "rfixicon", "ntchicon", "nrcticon"
+               }) {
+            fn(name);
+          }
+          return;
+        case SidebarTab::Defense:
+          for (const auto* name : {
+                 "nwalicon", "flakicon", "samicon", "tslaicon",
+                 "ironicon", "nukeicon", "npsiicon"
+               }) {
+            fn(name);
+          }
+          return;
+        case SidebarTab::Infantry:
+          for (const auto* name : {
+                 "e1icon", "engnicon", "dogicon", "flkticon",
+                 "ivanicon", "desoicon", "shkicon"
+               }) {
+            fn(name);
+          }
+          return;
+        case SidebarTab::Vehicles:
+          for (const auto* name : {
+                 "harvicon", "htnkicon", "v3icon", "ttnkicon",
+                 "sapcicon", "dronicon", "subicon", "dredicon", "mcvicon"
+               }) {
+            fn(name);
+          }
+          return;
+      }
+      return;
+  }
 }
 }
 
@@ -441,7 +530,8 @@ SidebarNode buildSide1Node(const SidebarAssets& assets, const SidebarState& stat
   SidebarNode side1 = makeImageNode(makeRect(0.0f, y, static_cast<float>(assets.side1.width), static_cast<float>(assets.side1.height)),
                                     assets.side1);
 
-  SidebarNode repair = makeNode(makeRect(20.0f, 8.0f,
+  SidebarNode repair = makeNode(makeRect(assets.repairFrames[0].width <= 52 ? 32.0f : 20.0f,
+                                         8.0f,
                                          static_cast<float>(assets.repairFrames[0].width),
                                          static_cast<float>(assets.repairFrames[0].height)));
   repair.action = SidebarClickAction::ToggleRepair;
@@ -461,23 +551,21 @@ SidebarNode buildSide1Node(const SidebarAssets& assets, const SidebarState& stat
                                   state.sellSelected ? assets.sellFrames[1] : assets.sellFrames[0]));
   appendChild(side1, std::move(sell));
 
-  constexpr std::array<float, 4> kTabX{26.0f, 55.0f, 84.0f, 113.0f};
+  const auto tabX = tabXOffsets(assets);
   for (const auto tab : {SidebarTab::Base, SidebarTab::Defense, SidebarTab::Infantry, SidebarTab::Vehicles}) {
     const auto tabIdx = tabIndex(tab);
     const auto& texture = activeTabTexture(assets, state, tab);
-    const bool tallLabel = (tab == SidebarTab::Infantry || tab == SidebarTab::Vehicles);
-    SidebarNode label = makeNode(makeRect(kTabX[tabIdx],
-                                          38.0f,
+    SidebarNode label = makeNode(makeRect(tabX[tabIdx],
+                                          tabY(assets, tab),
                                           static_cast<float>(texture.width),
-                                          tallLabel ? static_cast<float>(texture.width)
-                                                    : static_cast<float>(texture.height)));
+                                          static_cast<float>(texture.height)));
     if (state.tabVisible[tabIdx]) {
       label.action = SidebarClickAction::SelectTab;
       label.tab = tab;
     }
     appendChild(label,
                 makeImageNode(makeRect(0.0f,
-                                       tallLabel ? 2.0f : 0.0f,
+                                       0.0f,
                                        static_cast<float>(texture.width),
                                        static_cast<float>(texture.height)),
                               texture));
@@ -719,7 +807,8 @@ SidebarClickResult hitTestSidebarNode(const SidebarNode& node,
 SidebarAssets loadSidebarAssets(const std::filesystem::path& uiSpriteRoot,
                                 const std::filesystem::path& cameoSpriteRoot,
                                 const Palette& sidebarPalette,
-                                const Palette& cameoPalette) {
+                                const Palette& cameoPalette,
+                                const BuildFaction faction) {
   SidebarAssets assets{};
   assets.credits = loadShpFrameTexture(uiSpriteRoot / "credits.shp", sidebarPalette, 0);
   assets.top = loadShpFrameTexture(uiSpriteRoot / "top.shp", sidebarPalette, 0);
@@ -747,32 +836,17 @@ SidebarAssets loadSidebarAssets(const std::filesystem::path& uiSpriteRoot,
     }
   }
 
-  const auto addPanel = [&](const SidebarTab tab, std::initializer_list<const char*> names) {
+  const auto addPanel = [&](const SidebarTab tab) {
     auto& panel = assets.panelIcons[tabIndex(tab)];
-    panel.reserve(names.size());
-    for (const auto* name : names) {
+    forEachPanelIconName(faction, tab, [&](const char* name) {
       panel.push_back(SidebarIcon{std::string(name), loadOptionalCameo(cameoSpriteRoot, cameoPalette, name)});
-    }
+    });
   };
 
-  addPanel(SidebarTab::Base, {
-    "powricon", "reficon", "brrkicon", "gwepicon", "heliicon",
-    "ayaricon", "fixicon", "techicon", "gorep"
-  });
-  addPanel(SidebarTab::Defense, {
-    "paraicon", "aparicon", "chroicon", "bolticon", "wallicon",
-    "pillicon", "samicon", "prisicon", "gapicon", "gcanicon",
-    "asaticon", "csphicon", "wethicon"
-  });
-  addPanel(SidebarTab::Infantry, {
-    "giicon", "engnicon", "adogicon", "jjeticon", "snipicon",
-    "spyicon", "sealicon", "tanyicon", "clegicon"
-  });
-  addPanel(SidebarTab::Vehicles, {
-    "ahrvicon", "gtnkicon", "fvicon", "tnkdicon", "beagicon",
-    "sreficon", "rtnkicon", "mcvicon", "falcicon", "shadicon",
-    "landicon", "desticon", "dlphicon", "agisicon", "carricon"
-  });
+  addPanel(SidebarTab::Base);
+  addPanel(SidebarTab::Defense);
+  addPanel(SidebarTab::Infantry);
+  addPanel(SidebarTab::Vehicles);
 
   return assets;
 }

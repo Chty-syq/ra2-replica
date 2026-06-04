@@ -22,6 +22,7 @@
 enum class BuildingState {
   Preview,
   Constructing,
+  Packing,
   Complete
 };
 
@@ -31,6 +32,12 @@ struct BuildingAsset {
   std::string id;
   ArtDefinition art;
   FoundationSize foundation;
+
+  enum class LayerRole {
+    UnderUnit,
+    Normal,
+    OverUnit
+  };
 
   // 完成态的基础纹理和原始帧。
   UiTexture completeTexture;
@@ -42,6 +49,7 @@ struct BuildingAsset {
     std::string id;
     std::vector<UiTexture> textures;
     std::uint32_t frameDurationMs = 0;
+    LayerRole role = LayerRole::Normal;
   };
   std::vector<RenderLayer> completeLayers;
 
@@ -58,6 +66,8 @@ struct BuildingInstance {
   BuildingPlacement placement;
   BuildingState state = BuildingState::Complete;
   std::uint32_t stateStartTicks = 0;
+  int maxHp = 1000;
+  int hp = 1000;
 };
 
 using BuildingAssetMap = std::unordered_map<std::string, BuildingAsset>;
@@ -68,7 +78,8 @@ using BuildingAssetMap = std::unordered_map<std::string, BuildingAsset>;
                                                   const ArtIni& artIni,
                                                   const Palette& unitPalette,
                                                   const Palette& terrainPalette,
-                                                  TheaterStyle theater);
+                                                  TheaterStyle theater,
+                                                  BuildFaction faction);
 
 // 按 building id 单独加载一栋建筑的资源。
 // 这给按需缓存提供了基础，避免切换风格时总是一次性把整套建筑全重建。
@@ -81,7 +92,7 @@ using BuildingAssetMap = std::unordered_map<std::string, BuildingAsset>;
 
 // 侧栏图标使用 cameo id，世界里的建筑使用 building id。
 // 这个映射就是 UI 与建筑系统之间的桥。
-[[nodiscard]] std::optional<std::string> buildingIdForIcon(std::string_view iconId);
+[[nodiscard]] std::optional<std::string> buildingIdForIcon(std::string_view iconId, BuildFaction faction);
 
 [[nodiscard]] const BuildingAsset& assetForInstance(const BuildingAssetMap& assets,
                                                     const BuildingInstance& instance);
