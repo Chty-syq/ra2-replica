@@ -92,10 +92,17 @@ VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
 VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
                                               const ImGuiDebugPanelState& debugPanelState,
                                               const int directionIndex) {
+  const float directionRadians =
+    static_cast<float>(directionIndex) * 2.0f * 3.14159265358979323846f / 32.0f;
+  return buildRhinoTankRenderState(houseColors, debugPanelState, directionRadians);
+}
+
+VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
+                                              const ImGuiDebugPanelState& debugPanelState,
+                                              const float directionRadians) {
   VplBoxRendererState renderState;
 
-  const float directionStep = -2.0f * 3.14159265358979323846f / 32.0f;
-  const float directionAngle = directionStep * static_cast<float>(directionIndex);
+  const float directionAngle = -directionRadians;
   const auto world = multiply(
     makeRotationZMatrix(directionAngle + degToRad(debugPanelState.rhinoTransform.worldRotateZDeg)),
     multiply(makeRotationYMatrix(degToRad(debugPanelState.rhinoTransform.worldRotateYDeg)),

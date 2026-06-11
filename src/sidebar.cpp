@@ -441,8 +441,9 @@ void forEachPanelIconName(const BuildFaction faction, const SidebarTab tab, Fn&&
           return;
         case SidebarTab::Vehicles:
           for (const auto* name : {
-                 "harvicon", "htnkicon", "v3icon", "ttnkicon",
-                 "sapcicon", "dronicon", "subicon", "dredicon", "mcvicon"
+                 "harvicon", "htnkicon", "htkicon", "v3icon", "ttnkicon",
+                 "mtnkicon", "sapcicon", "dronicon", "subicon", "dredicon",
+                 "zepicon", "mcvicon"
                }) {
             fn(name);
           }

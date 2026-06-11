@@ -211,6 +211,16 @@ constexpr float kArtHeightToBonePixelsScale = 0.58f;
   return buildingId == "GAWEAP" || buildingId == "NAWEAP";
 }
 
+[[nodiscard]] bool isProductionLayer(const BuildingAsset::LayerRole role) {
+  return role == BuildingAsset::LayerRole::ProductionUnderUnit ||
+         role == BuildingAsset::LayerRole::ProductionOverUnit;
+}
+
+[[nodiscard]] bool isUnderUnitLayer(const BuildingAsset::LayerRole role) {
+  return role == BuildingAsset::LayerRole::UnderUnit ||
+         role == BuildingAsset::LayerRole::ProductionUnderUnit;
+}
+
 [[nodiscard]] bool rhinoInWarFactoryExitLane(const BuildingInstance& building,
                                              const RhinoUnitState& rhinoUnit) {
   const float localX = rhinoUnit.tilePosition.x - static_cast<float>(building.placement.topLeft.x);
@@ -461,7 +471,7 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
 
   for (std::size_t layerIndex = 1; layerIndex < asset.completeLayers.size(); ++layerIndex) {
     const auto& layer = asset.completeLayers[layerIndex];
-    if (layer.role == BuildingAsset::LayerRole::UnderUnit || layer.textures.empty()) {
+    if (isUnderUnitLayer(layer.role) || isProductionLayer(layer.role) || layer.textures.empty()) {
       continue;
     }
 
@@ -486,6 +496,77 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                                 1.0f,
                                                 1.0f);
     renderer.draw(GL_TRIANGLES, *layerTexture, layerVertices.data(), layerVertices.size());
+  }
+}
+
+[[nodiscard]] const UiTexture* currentLayerTexture(const BuildingAsset::RenderLayer& layer,
+                                                   const BuildingInstance& instance,
+                                                   const std::uint32_t nowTicks) {
+  if (layer.textures.empty()) {
+    return nullptr;
+  }
+
+  const UiTexture* layerTexture = &layer.textures.front();
+  if (layer.textures.size() > 1 && layer.frameDurationMs > 0) {
+    const auto frameDurationMs = std::max<std::uint32_t>(50, layer.frameDurationMs);
+    const std::size_t frameIndex = static_cast<std::size_t>(
+      ((nowTicks - instance.stateStartTicks) / frameDurationMs) % layer.textures.size());
+    layerTexture = &layer.textures[frameIndex];
+  }
+  return layerTexture;
+}
+
+void drawWarFactoryProductionLayerSubset(Renderer2D& renderer,
+                                         const BuildingAsset& asset,
+                                         const BuildingInstance& building,
+                                         const Vec2 mapOrigin,
+                                         const float tileWidth,
+                                         const float tileHeight,
+                                         const std::uint32_t nowTicks,
+                                         const float depth01,
+                                         const bool underUnitPass) {
+  const auto foundationAnchor = isoToScreen(building.placement.topLeft.x,
+                                            building.placement.topLeft.y,
+                                            mapOrigin,
+                                            tileWidth,
+                                            tileHeight);
+  const auto anchor = spriteAnchorInFrame(asset.completeFrame, asset.foundation);
+  const Vec2 spriteTopLeft{foundationAnchor.x - anchor.x, foundationAnchor.y - anchor.y};
+
+  for (const auto& layer : asset.completeLayers) {
+    const bool drawLayer =
+      underUnitPass
+        ? (layer.role == BuildingAsset::LayerRole::ProductionUnderUnit ||
+           layer.role == BuildingAsset::LayerRole::UnderUnit)
+        : layer.role == BuildingAsset::LayerRole::ProductionOverUnit;
+    if (!drawLayer) {
+      continue;
+    }
+
+    const UiTexture* layerTexture = currentLayerTexture(layer, building, nowTicks);
+    if (layerTexture == nullptr) {
+      continue;
+    }
+
+    const Vec2 layerTopRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y};
+    const Vec2 layerBottomRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y + layerTexture->height};
+    const Vec2 layerBottomLeft{spriteTopLeft.x, spriteTopLeft.y + layerTexture->height};
+    const auto layerVertices = makeQuadVertices(spriteTopLeft,
+                                                layerTopRight,
+                                                layerBottomRight,
+                                                layerBottomLeft,
+                                                depth01,
+                                                1.0f,
+                                                1.0f,
+                                                1.0f,
+                                                1.0f);
+    if (underUnitPass) {
+      glDepthMask(GL_FALSE);
+    }
+    renderer.draw(GL_TRIANGLES, *layerTexture, layerVertices.data(), layerVertices.size());
+    if (underUnitPass) {
+      glDepthMask(GL_TRUE);
+    }
   }
 }
 
@@ -832,13 +913,27 @@ void drawWarFactoryOverUnitLayers(Renderer2D& renderer,
                                   const float tileWidth,
                                   const float tileHeight,
                                   const std::uint32_t nowTicks,
-                                  const float depth01) {
-  if (asset.id != "GAWEAP" || building.state != BuildingState::Complete) {
+                                  const float depth01,
+                                  const bool productionSplit) {
+  if (!isWarFactory(asset.id) || building.state != BuildingState::Complete) {
+    return;
+  }
+
+  renderer.beginUiPass();
+  if (productionSplit) {
+    drawWarFactoryProductionLayerSubset(renderer,
+                                        asset,
+                                        building,
+                                        mapOrigin,
+                                        tileWidth,
+                                        tileHeight,
+                                        nowTicks,
+                                        depth01,
+                                        false);
     return;
   }
 
   RhinoUnitState dummyRhino;
-  renderer.beginUiPass();
   drawBuildingForegroundOverlay(renderer,
                                 asset,
                                 building,
@@ -848,4 +943,28 @@ void drawWarFactoryOverUnitLayers(Renderer2D& renderer,
                                 tileHeight,
                                 nowTicks,
                                 depth01);
+}
+
+void drawWarFactoryProductionUnderUnitLayers(Renderer2D& renderer,
+                                             const BuildingAsset& asset,
+                                             const BuildingInstance& building,
+                                             const Vec2 mapOrigin,
+                                             const float tileWidth,
+                                             const float tileHeight,
+                                             const std::uint32_t nowTicks,
+                                             const float depth01) {
+  if (asset.id != "NAWEAP" || building.state != BuildingState::Complete) {
+    return;
+  }
+
+  renderer.beginWorldPass();
+  drawWarFactoryProductionLayerSubset(renderer,
+                                      asset,
+                                      building,
+                                      mapOrigin,
+                                      tileWidth,
+                                      tileHeight,
+                                      nowTicks,
+                                      depth01,
+                                      true);
 }

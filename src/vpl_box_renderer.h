@@ -26,6 +26,8 @@ struct VplBoxRendererState {
     0.0f, 0.0f, 0.0f, 1.0f
   };
   std::array<float, 3> lightDirection{0.2013022f, -0.9101138f, -0.3621709f};
+  // 额外模型空间偏移。它会在 VXL/HVA 变换和 scaleFactor 之后、投影之前应用。
+  std::array<float, 3> modelOffset{0.0f, 0.0f, 0.0f};
   float bodyRotationDegrees = 0.0f;
   float scaleFactor = 1.0f;
   float turretRotationDegrees = 0.0f;
@@ -57,6 +59,10 @@ public:
                          const std::string& bodyStem,
                          const std::string& turretStem = {},
                          const std::string& barrelStem = {});
+  void loadTurretAssets(const std::filesystem::path& voxelRoot,
+                        const VplFile& vpl,
+                        const std::string& turretStem,
+                        const std::string& barrelStem = {});
   void setPalette(const Palette& palette);
 
   void renderToScreen(const VplBoxRendererState& state, int drawableWidth, int drawableHeight);

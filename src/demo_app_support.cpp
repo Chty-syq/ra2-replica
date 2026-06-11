@@ -23,8 +23,11 @@ DemoAppPaths locateDemoAppPaths(std::filesystem::path current) {
         current / "assets" / "palettes",
         current / "assets" / "icons" / "cameo",
         current / "assets" / "ui" / "sidebar",
+        current / "assets" / "effects",
         current / "assets" / "ui" / "unit_overlays" / "common",
+        current / "assets" / "vehicles",
         current / "assets" / "vehicles" / "rhino_tank",
+        current / "assets" / "vehicles" / "grizzly_tank",
         current / "assets" / "vehicles" / "allied_mcv",
         current / "assets" / "vehicles" / "soviet_mcv"
       };

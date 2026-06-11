@@ -41,6 +41,7 @@ add_executable(ra2_power_demo
   src/tmp_tile.cpp
   src/vpl_box_renderer.cpp
   src/voxel_unit.cpp
+  src/weapon_system.cpp
   src/vpl_file.cpp
   src/vxl_file.cpp
   third_party/glad/src/glad.cpp

@@ -13,7 +13,7 @@
 #include <utility>
 
 namespace {
-constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kAlliedBuildableIconToBuilding{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 17> kAlliedBuildableIconToBuilding{{
   {"powricon", "GAPOWR"},
   {"reficon", "GAREFN"},
   {"brrkicon", "GAPILE"},
@@ -28,6 +28,7 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kAlliedB
   {"samicon", "NASAM"},
   {"prisicon", "GAPRIS"},
   {"gapicon", "GAGAP"},
+  {"gcanicon", "GTGCAN"},
   {"csphicon", "GACSPH"},
   {"wethicon", "GAWETH"}
 }};
@@ -53,9 +54,14 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kSovietB
 
 template <typename Fn>
 void forEachBuildableIconMapping(const BuildFaction faction, Fn&& fn) {
-  const auto& mappings =
-    (faction == BuildFaction::Soviet) ? kSovietBuildableIconToBuilding : kAlliedBuildableIconToBuilding;
-  for (const auto& [iconId, buildingId] : mappings) {
+  if (faction == BuildFaction::Soviet) {
+    for (const auto& [iconId, buildingId] : kSovietBuildableIconToBuilding) {
+      fn(iconId, buildingId);
+    }
+    return;
+  }
+
+  for (const auto& [iconId, buildingId] : kAlliedBuildableIconToBuilding) {
     fn(iconId, buildingId);
   }
 }
@@ -386,9 +392,14 @@ struct LayerSpec {
     return specs;
   }
   if (buildingId == "NAWEAP") {
+    // 常态：NAWEAP + NAWEAP_A + NAWEAPBB，其中 bib 位于底层。
+    // 出厂：NAWEAP_1 + NAWEAP_2 + NAWEAP_A + NAWEAPBB，其中 _1 和 bib 位于坦克下方。
     addStatic(baseName);
+    addStatic(baseName + "_1", BuildingAsset::LayerRole::ProductionUnderUnit);
     addStatic(bibName, BuildingAsset::LayerRole::UnderUnit);
-    addAnimated(art.activeAnim, BuildingAsset::LayerRole::OverUnit);
+    addAnimated(art.activeAnim);
+    addStatic(baseName + "_2", BuildingAsset::LayerRole::ProductionOverUnit);
+    addAnimated(art.activeAnim, BuildingAsset::LayerRole::ProductionOverUnit);
     return specs;
   }
   if (buildingId == "GAAIRC") {

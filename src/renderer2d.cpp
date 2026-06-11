@@ -311,6 +311,8 @@ void Renderer2D::beginFrame(const float clearR, const float clearG, const float 
 
 void Renderer2D::beginWorldPass() {
   ensureInitialized();
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glEnable(GL_DEPTH_TEST);
   glDepthFunc(GL_LEQUAL);
   glDepthMask(GL_TRUE);
@@ -320,6 +322,8 @@ void Renderer2D::beginWorldPass() {
 
 void Renderer2D::beginUiPass() {
   ensureInitialized();
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
   glUseProgramPtr(program_);

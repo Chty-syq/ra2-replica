@@ -20,3 +20,7 @@
 [[nodiscard]] VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
                                                             const ImGuiDebugPanelState& debugPanelState,
                                                             int directionIndex);
+
+[[nodiscard]] VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
+                                                            const ImGuiDebugPanelState& debugPanelState,
+                                                            float directionRadians);

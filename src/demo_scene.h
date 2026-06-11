@@ -94,4 +94,14 @@ void drawWarFactoryOverUnitLayers(Renderer2D& renderer,
                                   float tileWidth,
                                   float tileHeight,
                                   std::uint32_t nowTicks,
-                                  float depth01);
+                                  float depth01,
+                                  bool productionSplit = false);
+
+void drawWarFactoryProductionUnderUnitLayers(Renderer2D& renderer,
+                                             const BuildingAsset& asset,
+                                             const BuildingInstance& building,
+                                             Vec2 mapOrigin,
+                                             float tileWidth,
+                                             float tileHeight,
+                                             std::uint32_t nowTicks,
+                                             float depth01);

@@ -36,7 +36,9 @@ struct BuildingAsset {
   enum class LayerRole {
     UnderUnit,
     Normal,
-    OverUnit
+    OverUnit,
+    ProductionUnderUnit,
+    ProductionOverUnit
   };
 
   // 完成态的基础纹理和原始帧。
@@ -68,6 +70,8 @@ struct BuildingInstance {
   std::uint32_t stateStartTicks = 0;
   int maxHp = 1000;
   int hp = 1000;
+  float turretHeadingRadians = 4.71238898038f;
+  float turretTargetHeadingRadians = 4.71238898038f;
 };
 
 using BuildingAssetMap = std::unordered_map<std::string, BuildingAsset>;

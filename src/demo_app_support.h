@@ -42,8 +42,11 @@ struct DemoAppPaths {
   std::filesystem::path paletteRoot;
   std::filesystem::path iconRoot;
   std::filesystem::path sidebarRoot;
+  std::filesystem::path effectsRoot;
   std::filesystem::path unitOverlayRoot;
+  std::filesystem::path vehicleRoot;
   std::filesystem::path rhinoRoot;
+  std::filesystem::path grizzlyRoot;
   std::filesystem::path alliedMcvRoot;
   std::filesystem::path sovietMcvRoot;
 };

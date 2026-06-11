@@ -29,14 +29,44 @@ struct RhinoUnitUiAssets {
   UiTexture healthPipRed;
 };
 
+enum class VehicleUnitKind {
+  Rhino,
+  Grizzly,
+  AlliedHarvester,
+  Ifv,
+  TankDestroyer,
+  BlackEagle,
+  PrismTank,
+  MirageTank,
+  AlliedMcv,
+  Intruder,
+  BlackHawk,
+  LandingCraft,
+  Destroyer,
+  AegisCruiser,
+  AircraftCarrier,
+  SovietHarvester,
+  V3Launcher,
+  FlakTrack,
+  TeslaTank,
+  ApocalypseTank,
+  AmphibiousTransport,
+  Submarine,
+  Dreadnought,
+  KirovAirship,
+  SovietMcv
+};
+
 // Rhino 的运行时状态。
 // 这里同时承载：
 // - 游戏层状态：选中、血量、移动目标
 // - 表现层状态：连续位置、朝向、移动命令提示
 struct RhinoUnitState {
+  VehicleUnitKind kind = VehicleUnitKind::Rhino;
   Vec2 tilePosition{7.0f, 10.0f};
   TileCoord occupiedCell{7, 10};
   float headingRadians = 0.0f;
+  float turretHeadingRadians = 0.0f;
   bool selected = false;
   int maxHp = 700;
   int hp = 700;
@@ -48,6 +78,11 @@ struct RhinoUnitState {
   bool finishPathBeforePendingMove = false;
   TileCoord pendingMoveTarget{7, 10};
   std::uint32_t waypointVisibleUntilTicks = 0;
+  bool groundFireActive = false;
+  Vec2 groundFireTarget{7.0f, 10.0f};
+  bool hasQueuedGroundFire = false;
+  Vec2 queuedGroundFireTarget{7.0f, 10.0f};
+  std::uint32_t nextGroundFireTicks = 0;
 };
 
 [[nodiscard]] RhinoUnitUiAssets loadRhinoUnitUiAssets(const std::filesystem::path& overlayRoot,
@@ -68,7 +103,8 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, float deltaSeconds);
 [[nodiscard]] bool issueRhinoMoveCommand(RhinoUnitState& unit,
                                          const MapGrid& map,
                                          TileCoord targetCell,
-                                         std::uint32_t nowTicks);
+                                         std::uint32_t nowTicks,
+                                         bool cancelGroundFire = true);
 
 [[nodiscard]] int rhinoDirectionIndex(const RhinoUnitState& unit);
 void setRhinoDirectionIndex(RhinoUnitState& unit, int directionIndex);

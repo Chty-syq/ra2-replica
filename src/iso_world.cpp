@@ -10,6 +10,16 @@ namespace {
   return asset.id == "GAWEAP";
 }
 
+[[nodiscard]] bool isUnderUnitLayer(const BuildingAsset::LayerRole role) {
+  return role == BuildingAsset::LayerRole::UnderUnit ||
+         role == BuildingAsset::LayerRole::ProductionUnderUnit;
+}
+
+[[nodiscard]] bool isProductionLayer(const BuildingAsset::LayerRole role) {
+  return role == BuildingAsset::LayerRole::ProductionUnderUnit ||
+         role == BuildingAsset::LayerRole::ProductionOverUnit;
+}
+
 // 用于表达“相对锚点格”的辅助偏移函数。
 TileCoord offsetTile(const TileCoord anchor, const int dx, const int dy) {
   return TileCoord{anchor.x + dx, anchor.y + dy};
@@ -450,6 +460,60 @@ void drawBuildingInstance(Renderer2D& renderer,
     logicalDepthWithFootprint.footprintOffsets[static_cast<std::size_t>(i) * 2 + 1] =
       static_cast<float>(footprintCoords[static_cast<std::size_t>(i)].y - instance.placement.topLeft.y);
   }
+
+  auto currentLayerTexture = [&](const BuildingAsset::RenderLayer& layer) -> const UiTexture* {
+    if (layer.textures.empty()) {
+      return nullptr;
+    }
+    const UiTexture* layerTexture = &layer.textures.front();
+    if (layer.textures.size() > 1 && layer.frameDurationMs > 0) {
+      const auto frameDurationMs = std::max<std::uint32_t>(50, layer.frameDurationMs);
+      const std::size_t frameIndex = static_cast<std::size_t>(
+        ((nowTicks - instance.stateStartTicks) / frameDurationMs) % layer.textures.size());
+      layerTexture = &layer.textures[frameIndex];
+    }
+    return layerTexture;
+  };
+
+  auto drawCompleteLayer = [&](const UiTexture& layerTexture, const BuildingAsset::LayerRole role) {
+    const Vec2 layerTopRight{spriteTopLeft.x + layerTexture.width, spriteTopLeft.y};
+    const Vec2 layerBottomRight{spriteTopLeft.x + layerTexture.width, spriteTopLeft.y + layerTexture.height};
+    const Vec2 layerBottomLeft{spriteTopLeft.x, spriteTopLeft.y + layerTexture.height};
+    const auto layerVertices = makeQuadVertices(spriteTopLeft,
+                                                layerTopRight,
+                                                layerBottomRight,
+                                                layerBottomLeft,
+                                                depth01,
+                                                tintR,
+                                                tintG,
+                                                tintB,
+                                                tintA);
+    const bool layerWritesDepth = !isUnderUnitLayer(role);
+    if (!layerWritesDepth) {
+      glDepthMask(GL_FALSE);
+    }
+    renderer.draw(GL_TRIANGLES,
+                  layerTexture,
+                  layerVertices.data(),
+                  layerVertices.size(),
+                  logicalDepthWithFootprint);
+    if (!layerWritesDepth) {
+      glDepthMask(GL_TRUE);
+    }
+  };
+
+  if (instance.state != BuildingState::Constructing && instance.state != BuildingState::Packing) {
+    for (std::size_t layerIndex = 1; layerIndex < asset.completeLayers.size(); ++layerIndex) {
+      const auto& layer = asset.completeLayers[layerIndex];
+      if (isProductionLayer(layer.role) || !isUnderUnitLayer(layer.role)) {
+        continue;
+      }
+      if (const auto* layerTexture = currentLayerTexture(layer)) {
+        drawCompleteLayer(*layerTexture, layer.role);
+      }
+    }
+  }
+
   const auto baseVertices = makeQuadVertices(spriteTopLeft,
                                              spriteTopRight,
                                              spriteBottomRight,
@@ -487,6 +551,12 @@ void drawBuildingInstance(Renderer2D& renderer,
   // 第 0 层已经作为基础层画过了，后面的层继续按顺序叠加。
   for (std::size_t layerIndex = 1; layerIndex < asset.completeLayers.size(); ++layerIndex) {
     const auto& layer = asset.completeLayers[layerIndex];
+    if (isProductionLayer(layer.role)) {
+      continue;
+    }
+    if (isUnderUnitLayer(layer.role)) {
+      continue;
+    }
     if (defersOverUnitLayersUntilAfterUnits(asset) && layer.role == BuildingAsset::LayerRole::OverUnit) {
       continue;
     }
@@ -514,7 +584,7 @@ void drawBuildingInstance(Renderer2D& renderer,
                                                 tintG,
                                                 tintB,
                                                 tintA);
-    const bool layerWritesDepth = layer.role != BuildingAsset::LayerRole::UnderUnit;
+    const bool layerWritesDepth = !isUnderUnitLayer(layer.role);
     if (!layerWritesDepth) {
       glDepthMask(GL_FALSE);
     }

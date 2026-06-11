@@ -12,6 +12,7 @@
 #include "sidebar.h"
 #include "vpl_box_renderer.h"
 #include "voxel_unit.h"
+#include "weapon_system.h"
 
 #include <SDL.h>
 #include <SDL_opengl.h>
@@ -21,10 +22,12 @@
 #include <filesystem>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -60,24 +63,80 @@ struct WarFactoryProductionState {
   std::size_t tankIndex = 0;
 };
 
+struct VehicleRenderSpec {
+  VehicleUnitKind kind;
+  BuildFaction faction;
+  std::string_view iconId;
+  std::string_view objectId;
+  std::string_view folder;
+  std::string_view bodyStem;
+  std::string_view turretStem;
+  std::string_view barrelStem;
+};
+
+struct VehicleRendererCache {
+  std::unordered_map<int, std::unique_ptr<VplBoxRenderer>> renderers;
+};
+
 constexpr int kMcvDeployDirectionIndex = 12;
 constexpr int kWarFactoryExitDirectionIndex = 0;
 constexpr std::uint32_t kBuildingBuildupFrameDurationMs = 50;
+constexpr float kPi = 3.14159265358979323846f;
+constexpr float kTwoPi = 2.0f * kPi;
+constexpr float kGrandCannonTurnSpeedRadiansPerSecond = 1.6f;
+
+constexpr VehicleRenderSpec kVehicleRenderSpecs[] = {
+  {VehicleUnitKind::AlliedHarvester, BuildFaction::Allied, "ahrvicon", "CMIN", "allied_harvester", "cmin", "", ""},
+  {VehicleUnitKind::Grizzly, BuildFaction::Allied, "gtnkicon", "MTNK", "grizzly_tank", "gtnk", "gtnktur", "gtnkbarl"},
+  {VehicleUnitKind::Ifv, BuildFaction::Allied, "fvicon", "FV", "ifv", "fv", "fvtur", ""},
+  {VehicleUnitKind::TankDestroyer, BuildFaction::Allied, "tnkdicon", "TNKD", "tank_destroyer", "tnkd", "", ""},
+  {VehicleUnitKind::BlackEagle, BuildFaction::Allied, "beagicon", "BEAG", "black_eagle", "beag", "", ""},
+  {VehicleUnitKind::PrismTank, BuildFaction::Allied, "sreficon", "SREF", "prism_tank", "sref", "sreftur", ""},
+  {VehicleUnitKind::MirageTank, BuildFaction::Allied, "rtnkicon", "RTNK", "mirage_tank", "rtnk", "rtnktur", "rtnkbarl"},
+  {VehicleUnitKind::AlliedMcv, BuildFaction::Allied, "mcvicon", "AMCV", "allied_mcv", "mcv", "", ""},
+  {VehicleUnitKind::Intruder, BuildFaction::Allied, "falcicon", "FALC", "intruder", "falc", "", ""},
+  {VehicleUnitKind::BlackHawk, BuildFaction::Allied, "shadicon", "SHAD", "blackhawk", "shad", "", ""},
+  {VehicleUnitKind::LandingCraft, BuildFaction::Allied, "landicon", "LCRF", "landing_craft", "lcrf", "", ""},
+  {VehicleUnitKind::Destroyer, BuildFaction::Allied, "desticon", "DEST", "destroyer", "dest", "", ""},
+  {VehicleUnitKind::AegisCruiser, BuildFaction::Allied, "agisicon", "AEGIS", "aegis_cruiser", "aegis", "", ""},
+  {VehicleUnitKind::AircraftCarrier, BuildFaction::Allied, "carricon", "CARRIER", "aircraft_carrier", "carrier", "", ""},
+  {VehicleUnitKind::SovietHarvester, BuildFaction::Soviet, "harvicon", "HARV", "soviet_harvester", "harv", "harvtur", ""},
+  {VehicleUnitKind::Rhino, BuildFaction::Soviet, "htnkicon", "HTNK", "rhino_tank", "htnk", "htnktur", "htnkbarl"},
+  {VehicleUnitKind::V3Launcher, BuildFaction::Soviet, "v3icon", "V3", "v3_launcher", "v3", "", ""},
+  {VehicleUnitKind::FlakTrack, BuildFaction::Soviet, "htkicon", "HTK", "flak_track", "htk", "htktur", "htkbarl"},
+  {VehicleUnitKind::TeslaTank, BuildFaction::Soviet, "ttnkicon", "TTNK", "tesla_tank", "ttnk", "ttnktur", ""},
+  {VehicleUnitKind::ApocalypseTank, BuildFaction::Soviet, "mtnkicon", "APOC", "apocalypse_tank", "mtnk", "mtnktur", "mtnkbarl"},
+  {VehicleUnitKind::AmphibiousTransport, BuildFaction::Soviet, "sapcicon", "SAPC", "amphibious_transport", "trs", "", ""},
+  {VehicleUnitKind::Submarine, BuildFaction::Soviet, "subicon", "SUB", "submarine", "sub", "", ""},
+  {VehicleUnitKind::Dreadnought, BuildFaction::Soviet, "dredicon", "DRED", "dreadnought", "dred", "", ""},
+  {VehicleUnitKind::KirovAirship, BuildFaction::Soviet, "zepicon", "ZEP", "kirov_airship", "zep", "", ""},
+  {VehicleUnitKind::SovietMcv, BuildFaction::Soviet, "mcvicon", "SMCV", "soviet_mcv", "smcv", "", ""}
+};
+
+void destroyVehicleRendererCache(VehicleRendererCache& cache);
 
 void cleanupApp(SDL_Window*& window,
                 SDL_GLContext& glContext,
                 Renderer2D& renderer,
                 IsoGridRenderer& gridRenderer,
                 VplBoxRenderer& rhinoRenderer,
+                VplBoxRenderer& grizzlyRenderer,
+                VehicleRendererCache& vehicleRendererCache,
+                VplBoxRenderer& grandCannonRenderer,
                 VplBoxRenderer& mcvRenderer,
                 SidebarAssets& sidebarAssets,
                 BuildingAssetCache& buildingAssetCache,
-                RhinoUnitUiAssets& rhinoUiAssets) {
+                RhinoUnitUiAssets& rhinoUiAssets,
+                WeaponVisualAssets& weaponVisualAssets) {
   shutdownImGuiDebugPanel();
+  destroyWeaponVisualAssets(weaponVisualAssets);
   destroySidebarAssets(sidebarAssets);
   destroyBuildingAssetCache(buildingAssetCache);
   destroyRhinoUnitUiAssets(rhinoUiAssets);
   mcvRenderer.destroy();
+  grandCannonRenderer.destroy();
+  destroyVehicleRendererCache(vehicleRendererCache);
+  grizzlyRenderer.destroy();
   rhinoRenderer.destroy();
   gridRenderer.destroy();
   renderer.destroy();
@@ -103,6 +162,23 @@ void cleanupApp(SDL_Window*& window,
 
 [[nodiscard]] Vec2 mapOriginForViewport(const ViewportState& viewport) {
   return Vec2{viewport.width * 0.5f, DemoAppConfig::kMapOrigin.y};
+}
+
+[[nodiscard]] WeaponRuntimeParams weaponParamsFromDebugState(const WeaponDebugState& state) {
+  return WeaponRuntimeParams{
+    state.rangeCells,
+    state.rofFrames,
+    state.rofFramesPerSecond,
+    state.turretTurnSpeedRadiansPerSecond,
+    state.fireTurnToleranceRadians,
+    state.fireForwardLeptons,
+    state.fireLateralLeptons,
+    state.fireHeightLeptons,
+    state.arcingSpeedLeptonsPerFrame,
+    state.gravityLeptonsPerFrameSquared,
+    state.projectileRulesFramesPerSecond,
+    state.minDurationRulesFrames
+  };
 }
 
 [[nodiscard]] const char* defaultPowerPlantId(const BuildFaction faction) {
@@ -145,8 +221,106 @@ void cleanupApp(SDL_Window*& window,
   return "GAWEAP";
 }
 
-[[nodiscard]] bool isTankProductionIcon(const std::string_view iconId) {
-  return iconId == "htnkicon" || iconId == "gtnkicon";
+[[nodiscard]] int vehicleRendererCacheKey(const VehicleUnitKind kind) {
+  return static_cast<int>(kind);
+}
+
+[[nodiscard]] bool usesDedicatedVehicleRenderer(const VehicleUnitKind kind) {
+  return kind == VehicleUnitKind::Rhino || kind == VehicleUnitKind::Grizzly;
+}
+
+[[nodiscard]] const VehicleRenderSpec* vehicleSpecForKind(const VehicleUnitKind kind) {
+  for (const auto& spec : kVehicleRenderSpecs) {
+    if (spec.kind == kind) {
+      return &spec;
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] const VehicleRenderSpec* vehicleSpecForProductionIcon(const std::string_view iconId,
+                                                                    const BuildFaction faction) {
+  for (const auto& spec : kVehicleRenderSpecs) {
+    if (spec.faction == faction && spec.iconId == iconId) {
+      return &spec;
+    }
+  }
+  return nullptr;
+}
+
+VplBoxRenderer& ensureCachedVehicleRenderer(VehicleRendererCache& cache,
+                                            SDL_Window* window,
+                                            const DemoAppPaths& paths,
+                                            const VplFile& voxelLighting,
+                                            const Palette& unitPalette,
+                                            const VehicleUnitKind kind) {
+  const int cacheKey = vehicleRendererCacheKey(kind);
+  if (const auto it = cache.renderers.find(cacheKey); it != cache.renderers.end()) {
+    return *it->second;
+  }
+
+  const auto* spec = vehicleSpecForKind(kind);
+  if (spec == nullptr) {
+    throw std::runtime_error("Missing vehicle render spec");
+  }
+
+  auto renderer = std::make_unique<VplBoxRenderer>();
+  renderer->initialize(window);
+  renderer->loadVehicleAssets(paths.vehicleRoot / std::string(spec->folder),
+                              voxelLighting,
+                              std::string(spec->bodyStem),
+                              std::string(spec->turretStem),
+                              std::string(spec->barrelStem));
+  renderer->setPalette(unitPalette);
+
+  auto [it, inserted] = cache.renderers.emplace(cacheKey, std::move(renderer));
+  (void)inserted;
+  return *it->second;
+}
+
+void preloadVehicleRenderers(VehicleRendererCache& cache,
+                             SDL_Window* window,
+                             const DemoAppPaths& paths,
+                             const VplFile& voxelLighting,
+                             const Palette& unitPalette) {
+  for (const auto& spec : kVehicleRenderSpecs) {
+    if (!usesDedicatedVehicleRenderer(spec.kind)) {
+      ensureCachedVehicleRenderer(cache, window, paths, voxelLighting, unitPalette, spec.kind);
+    }
+  }
+}
+
+void setVehicleRendererCachePalette(VehicleRendererCache& cache, const Palette& unitPalette) {
+  for (auto& [cacheKey, renderer] : cache.renderers) {
+    (void)cacheKey;
+    renderer->setPalette(unitPalette);
+  }
+}
+
+void destroyVehicleRendererCache(VehicleRendererCache& cache) {
+  for (auto& [cacheKey, renderer] : cache.renderers) {
+    (void)cacheKey;
+    renderer->destroy();
+  }
+  cache.renderers.clear();
+}
+
+VplBoxRenderer& vehicleRendererForKind(const VehicleUnitKind kind,
+                                       VplBoxRenderer& rhinoRenderer,
+                                       VplBoxRenderer& grizzlyRenderer,
+                                       VehicleRendererCache& cache,
+                                       SDL_Window* window,
+                                       const DemoAppPaths& paths,
+                                       const VplFile& voxelLighting,
+                                       const Palette& unitPalette) {
+  switch (kind) {
+    case VehicleUnitKind::Rhino:
+      return rhinoRenderer;
+    case VehicleUnitKind::Grizzly:
+      return grizzlyRenderer;
+    default:
+      return ensureCachedVehicleRenderer(cache, window, paths, voxelLighting, unitPalette, kind);
+  }
 }
 
 [[nodiscard]] std::optional<BuildFaction> factionForConstructionYardId(const std::string& buildingId) {
@@ -209,7 +383,154 @@ void cleanupApp(SDL_Window*& window,
 }
 
 [[nodiscard]] bool isLayeredWarFactoryInstance(const BuildingInstance& building) {
-  return building.assetId == "GAWEAP" && building.state == BuildingState::Complete;
+  return (building.assetId == "GAWEAP" || building.assetId == "NAWEAP") &&
+         building.state == BuildingState::Complete;
+}
+
+[[nodiscard]] bool isCompleteGrandCannon(const BuildingInstance& building) {
+  return building.assetId == "GTGCAN" && building.state == BuildingState::Complete;
+}
+
+[[nodiscard]] float normalizeAngleRadians(float radians) {
+  while (radians < 0.0f) {
+    radians += kTwoPi;
+  }
+  while (radians >= kTwoPi) {
+    radians -= kTwoPi;
+  }
+  return radians;
+}
+
+[[nodiscard]] float shortestAngleDelta(const float fromRadians, const float toRadians) {
+  float delta = normalizeAngleRadians(toRadians) - normalizeAngleRadians(fromRadians);
+  if (delta > kPi) {
+    delta -= kTwoPi;
+  } else if (delta < -kPi) {
+    delta += kTwoPi;
+  }
+  return delta;
+}
+
+[[nodiscard]] float rotateTowardAngle(const float currentRadians,
+                                      const float targetRadians,
+                                      const float maxStepRadians) {
+  const float delta = shortestAngleDelta(currentRadians, targetRadians);
+  if (std::fabs(delta) <= maxStepRadians) {
+    return normalizeAngleRadians(targetRadians);
+  }
+  return normalizeAngleRadians(currentRadians + (delta > 0.0f ? maxStepRadians : -maxStepRadians));
+}
+
+[[nodiscard]] Vec2 screenToLogicalFloat(const float screenX,
+                                        const float screenY,
+                                        const Vec2 origin,
+                                        const float tileWidth,
+                                        const float tileHeight) {
+  const float dx = (screenX - origin.x) / (tileWidth * 0.5f);
+  const float dy = (screenY - origin.y) / (tileHeight * 0.5f);
+  return Vec2{
+    (dy + dx) * 0.5f,
+    (dy - dx) * 0.5f
+  };
+}
+
+[[nodiscard]] Vec2 logicalCenterForPlacementLocal(const BuildingPlacement& placement) {
+  const auto tiles = foundationTiles(placement);
+  if (tiles.empty()) {
+    return Vec2{static_cast<float>(placement.topLeft.x), static_cast<float>(placement.topLeft.y)};
+  }
+
+  Vec2 sum{};
+  for (const auto tile : tiles) {
+    sum.x += static_cast<float>(tile.x);
+    sum.y += static_cast<float>(tile.y);
+  }
+  const float invCount = 1.0f / static_cast<float>(tiles.size());
+  return Vec2{sum.x * invCount, sum.y * invCount};
+}
+
+bool issueGrandCannonTurnCommand(BuildingInstance& building,
+                                 const float mouseX,
+                                 const float mouseY,
+                                 const Vec2 mapOrigin,
+                                 const float tileWidth,
+                                 const float tileHeight) {
+  if (!isCompleteGrandCannon(building)) {
+    return false;
+  }
+
+  const auto center = logicalCenterForPlacementLocal(building.placement);
+  const auto target = screenToLogicalFloat(mouseX, mouseY, mapOrigin, tileWidth, tileHeight);
+  const Vec2 delta{target.x - center.x, target.y - center.y};
+  if (delta.x * delta.x + delta.y * delta.y <= 0.0001f) {
+    return false;
+  }
+
+  building.turretTargetHeadingRadians = normalizeAngleRadians(std::atan2(delta.y, delta.x));
+  return true;
+}
+
+void updateGrandCannonTurrets(std::vector<BuildingInstance>& buildings, const float deltaSeconds) {
+  const float maxStep = kGrandCannonTurnSpeedRadiansPerSecond * std::max(0.0f, deltaSeconds);
+  for (auto& building : buildings) {
+    if (!isCompleteGrandCannon(building)) {
+      continue;
+    }
+    building.turretHeadingRadians =
+      rotateTowardAngle(building.turretHeadingRadians, building.turretTargetHeadingRadians, maxStep);
+  }
+}
+
+[[nodiscard]] Vec2 grandCannonTurretAnchor(const BuildingInstance& building,
+                                           const Vec2 mapOrigin,
+                                           const float tileWidth,
+                                           const float tileHeight) {
+  constexpr float kTurretAnimX = 3.0f;
+  constexpr float kTurretAnimY = 28.0f;
+
+  const auto baseAnchor = isoToScreen(building.placement.topLeft.x,
+                                      building.placement.topLeft.y,
+                                      mapOrigin,
+                                      tileWidth,
+                                      tileHeight);
+  return Vec2{
+    baseAnchor.x + kTurretAnimX,
+    baseAnchor.y + kTurretAnimY
+  };
+}
+
+[[nodiscard]] VplBoxRendererState grandCannonRenderState(const HouseColorSet& houseColors,
+                                                         const ImGuiDebugPanelState& debugPanelState,
+                                                         const BuildingInstance& building) {
+  constexpr float kTurretAnimZAdjust = -60.0f;
+  constexpr float kRulesLeptonToVoxelWorldUnit = 30.0f * 1.41421356237f / 256.0f;
+
+  auto state = buildRhinoTankRenderState(houseColors,
+                                         debugPanelState,
+                                         building.turretHeadingRadians);
+  state.bodyRotationDegrees = 0.0f;
+  state.turretRotationDegrees = 0.0f;
+  state.turretOffsetPixels = 0.0f;
+  // rules.ini 没有给建筑炮塔 VXL 单独的缩放参数，尺寸应使用 VXL/HVA 自身变换。
+  state.modelOffset[2] = -kTurretAnimZAdjust * kRulesLeptonToVoxelWorldUnit;
+  state.shadowAlpha = 0.0f;
+  return state;
+}
+
+[[nodiscard]] float grandCannonTurretDepth(const BuildingPlacement& placement,
+                                           const float tileWidth,
+                                           const float tileHeight) {
+  constexpr float kTurretDepthBias01 = 0.00008f;
+
+  float frontMostDepth = 0.999f;
+  for (const auto tile : foundationTiles(placement)) {
+    const auto tileDepth = depthFromLogicalCenter(Vec2{static_cast<float>(tile.x),
+                                                       static_cast<float>(tile.y)},
+                                                 tileWidth,
+                                                 tileHeight);
+    frontMostDepth = std::min(frontMostDepth, tileDepth);
+  }
+  return std::clamp(frontMostDepth - kTurretDepthBias01, 0.001f, 0.999f);
 }
 
 [[nodiscard]] bool footprintContainsTile(const BuildingPlacement& placement, const TileCoord tile) {
@@ -281,6 +602,32 @@ void deselectRhinoTanks(std::vector<RhinoUnitState>& tanks) {
   return std::nullopt;
 }
 
+[[nodiscard]] bool isStopCommandEvent(const SDL_Event& event) {
+  return event.type == SDL_KEYDOWN &&
+         (event.key.keysym.sym == SDLK_s || event.key.keysym.scancode == SDL_SCANCODE_S);
+}
+
+[[nodiscard]] bool isCtrlModifierDown() {
+  int keyCount = 0;
+  const auto* keyboardState = SDL_GetKeyboardState(&keyCount);
+  const bool scancodeCtrl =
+    keyboardState != nullptr &&
+    keyCount > SDL_SCANCODE_RCTRL &&
+    (keyboardState[SDL_SCANCODE_LCTRL] != 0 || keyboardState[SDL_SCANCODE_RCTRL] != 0);
+  return (SDL_GetModState() & KMOD_CTRL) != 0 || scancodeCtrl;
+}
+
+[[nodiscard]] bool stopSelectedRhinoGroundFire(std::vector<RhinoUnitState>& tanks) {
+  bool hasSelectedRhino = false;
+  for (auto& tank : tanks) {
+    if (tank.kind == VehicleUnitKind::Rhino && tank.selected) {
+      stopRhinoGroundFire(tank);
+      hasSelectedRhino = true;
+    }
+  }
+  return hasSelectedRhino;
+}
+
 [[nodiscard]] std::optional<std::size_t> hitTestRhinoTanks(const std::vector<RhinoUnitState>& tanks,
                                                            const float mouseX,
                                                            const float mouseY,
@@ -350,10 +697,14 @@ int main(int, char**) {
   Renderer2D renderer;
   IsoGridRenderer gridRenderer;
   VplBoxRenderer rhinoRenderer;
+  VplBoxRenderer grizzlyRenderer;
+  VehicleRendererCache vehicleRendererCache;
+  VplBoxRenderer grandCannonRenderer;
   VplBoxRenderer mcvRenderer;
   SidebarAssets sidebarAssets;
   BuildingAssetCache buildingAssetCache;
   RhinoUnitUiAssets rhinoUiAssets;
+  WeaponVisualAssets weaponVisualAssets;
 
   try {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -394,6 +745,7 @@ int main(int, char**) {
     const auto cameoPalette = Palette::load(paths.paletteRoot / "ui" / "cameo.pal");
     const auto mousePalette = Palette::load(paths.paletteRoot / "ui" / "mousepal.pal");
     const auto overlayPalette = Palette::load(paths.paletteRoot / "ui" / "palette.pal");
+    const auto animationPalette = Palette::load(paths.paletteRoot / "effects" / "anim.pal");
     (void)mousePalette;
 
     debugPanelState.style.houseColorIndex = houseColors.defaultIndex;
@@ -412,10 +764,25 @@ int main(int, char**) {
                             debugPanelState.style);
     sidebarAssets = loadSidebarAssetsForStyle(paths, debugPanelState.style, cameoPalette);
     rhinoUiAssets = loadRhinoUnitUiAssets(paths.unitOverlayRoot, overlayPalette);
+    weaponVisualAssets = loadWeaponVisualAssets(paths.effectsRoot, animationPalette);
 
     rhinoRenderer.initialize(window);
     rhinoRenderer.loadRhinoAssets(paths.rhinoRoot, voxelLighting);
     rhinoRenderer.setPalette(initialTheaterPalettes.unit);
+    grizzlyRenderer.initialize(window);
+    grizzlyRenderer.loadVehicleAssets(paths.grizzlyRoot, voxelLighting, "gtnk", "gtnktur", "gtnkbarl");
+    grizzlyRenderer.setPalette(initialTheaterPalettes.unit);
+    preloadVehicleRenderers(vehicleRendererCache,
+                            window,
+                            paths,
+                            voxelLighting,
+                            initialTheaterPalettes.unit);
+    grandCannonRenderer.initialize(window);
+    grandCannonRenderer.loadTurretAssets(paths.buildingRoot / "allied" / "gtgcan",
+                                         voxelLighting,
+                                         "gtgcantur",
+                                         "gtgcanbarl");
+    grandCannonRenderer.setPalette(initialTheaterPalettes.unit);
     mcvRenderer.initialize(window);
     BuildFaction mcvFaction = debugPanelState.style.faction;
     loadMcvAssetsForFaction(mcvRenderer, paths, mcvFaction, voxelLighting);
@@ -477,6 +844,8 @@ int main(int, char**) {
 
     std::vector<RhinoUnitState> rhinoTanks(1);
     initializeRhinoUnit(rhinoTanks.front(), map, TileCoord{7, 10});
+    std::vector<ProjectileInstance> projectiles;
+    std::vector<CombatEffectInstance> combatEffects;
     RhinoUnitState mcvUnit;
     bool mcvActive = true;
     McvTransitionState mcvTransition;
@@ -497,9 +866,11 @@ int main(int, char**) {
       const auto simulationFrame = advanceSimulationClock(debugPanelState, lastRealTicks, simulationTicks);
       const std::uint32_t nowTicks = simulationFrame.nowTicks;
       Vec2 mapOrigin = mapOriginForViewport(viewport);
+      const WeaponRuntimeParams weaponParams = weaponParamsFromDebugState(debugPanelState.weapon);
 
       updateSidebarStateForDemo(sidebarState, sidebarAssets, viewport.height, nowTicks);
       updateConstructionStates(buildings, *activeBuildingAssets, nowTicks);
+      updateGrandCannonTurrets(buildings, simulationFrame.deltaSeconds);
 
       SDL_Event event{};
       while (SDL_PollEvent(&event)) {
@@ -519,6 +890,10 @@ int main(int, char**) {
             event.key.keysym.sym == SDLK_d &&
             (event.key.keysym.mod & KMOD_CTRL) != 0) {
           debugPanelState.visible = !debugPanelState.visible;
+          continue;
+        }
+
+        if (isStopCommandEvent(event) && stopSelectedRhinoGroundFire(rhinoTanks)) {
           continue;
         }
 
@@ -562,7 +937,9 @@ int main(int, char**) {
                 if (mcvActive) {
                   mcvUnit.selected = false;
                 }
-              } else if (isTankProductionIcon(sidebarClick.iconId) &&
+              } else if (const auto* vehicleSpec =
+                           vehicleSpecForProductionIcon(sidebarClick.iconId, debugPanelState.style.faction);
+                         vehicleSpec != nullptr &&
                          !tankProduction.active &&
                          mcvTransition.phase == McvTransitionPhase::None) {
                 const auto factoryIndex = findCompleteWarFactory(buildings, debugPanelState.style.faction);
@@ -575,12 +952,14 @@ int main(int, char**) {
                     map.setOccupied(foundationTiles(factory.placement), true);
 
                     deselectRhinoTanks(rhinoTanks);
+                    const VehicleUnitKind producedKind = vehicleSpec->kind;
                     RhinoUnitState producedTank;
+                    producedTank.kind = producedKind;
                     producedTank.tilePosition =
                       Vec2{static_cast<float>(productionCenter.x), static_cast<float>(productionCenter.y)};
                     producedTank.occupiedCell = productionCenter;
                     producedTank.selected = true;
-                    producedTank.maxHp = maxHpForObject("HTNK");
+                    producedTank.maxHp = maxHpForObject(std::string(vehicleSpec->objectId));
                     producedTank.hp = producedTank.maxHp;
                     producedTank.path = exitPath;
                     producedTank.moveTarget = exitCell;
@@ -629,6 +1008,23 @@ int main(int, char**) {
 
           if (mcvTransition.phase != McvTransitionPhase::None) {
             continue;
+          }
+
+          if (isCtrlModifierDown()) {
+            if (const auto selectedTankIndex = selectedRhinoTankIndex(rhinoTanks); selectedTankIndex.has_value()) {
+              auto& selectedTank = rhinoTanks[*selectedTankIndex];
+              if (issueRhinoGroundFireCommand(selectedTank,
+                                              map,
+                                              screenToLogicalFloat(mouseX,
+                                                                   mouseY,
+                                                                   mapOrigin,
+                                                                   DemoAppConfig::kTileWidth,
+                                                                   DemoAppConfig::kTileHeight),
+                                              nowTicks,
+                                              weaponParams)) {
+                continue;
+              }
+            }
           }
 
           if (mcvActive) {
@@ -704,6 +1100,26 @@ int main(int, char**) {
               mcvUnit.selected = false;
             }
             continue;
+          }
+
+          if (selectedBuildingIndex.has_value() && *selectedBuildingIndex < buildings.size()) {
+            auto& selectedBuilding = buildings[*selectedBuildingIndex];
+            if (isCompleteGrandCannon(selectedBuilding)) {
+              const auto targetCell = screenToIso(mouseX,
+                                                  mouseY,
+                                                  mapOrigin,
+                                                  DemoAppConfig::kTileWidth,
+                                                  DemoAppConfig::kTileHeight);
+              if (map.isBuildable(targetCell)) {
+                issueGrandCannonTurnCommand(selectedBuilding,
+                                            mouseX,
+                                            mouseY,
+                                            mapOrigin,
+                                            DemoAppConfig::kTileWidth,
+                                            DemoAppConfig::kTileHeight);
+              }
+              continue;
+            }
           }
 
           if (selectedBuildingIndex.has_value() && !mcvActive) {
@@ -842,7 +1258,9 @@ int main(int, char**) {
 
       for (auto& tank : rhinoTanks) {
         updateRhinoUnit(tank, map, simulationFrame.deltaSeconds);
+        updateRhinoWeapon(tank, projectiles, combatEffects, simulationFrame.deltaSeconds, nowTicks, weaponParams);
       }
+      updateWeaponProjectilesAndEffects(projectiles, combatEffects, simulationFrame.deltaSeconds);
       if (tankProduction.active) {
         map.setOccupied(foundationTiles(tankProduction.factoryPlacement), true);
         // The produced tank can receive a queued move while exiting. Free the
@@ -1012,6 +1430,9 @@ int main(int, char**) {
           if (theaterChanged) {
             renderer.setIndexedPalettes(currentTheaterPalettes.unit, currentTheaterPalettes.terrain);
             rhinoRenderer.setPalette(currentTheaterPalettes.unit);
+            grizzlyRenderer.setPalette(currentTheaterPalettes.unit);
+            setVehicleRendererCachePalette(vehicleRendererCache, currentTheaterPalettes.unit);
+            grandCannonRenderer.setPalette(currentTheaterPalettes.unit);
             mcvRenderer.setPalette(currentTheaterPalettes.unit);
           }
           renderer.setRemapColor(activeHouseColorValue(debugPanelState.style, houseColors));
@@ -1064,9 +1485,25 @@ int main(int, char**) {
                        DemoAppConfig::kTileHeight,
                        renderQueue);
 
+      const auto& drawTheaterPalettes = palettesForTheater(paletteLibrary, debugPanelState.style.theater);
       auto drawRhinoTankInstance = [&](const RhinoUnitState& tank) {
+        VplBoxRenderer& vehicleRenderer = vehicleRendererForKind(tank.kind,
+                                                                 rhinoRenderer,
+                                                                 grizzlyRenderer,
+                                                                 vehicleRendererCache,
+                                                                 window,
+                                                                 paths,
+                                                                 voxelLighting,
+                                                                 drawTheaterPalettes.unit);
+        auto renderState = buildRhinoTankRenderState(houseColors,
+                                                     debugPanelState,
+                                                     rhinoDirectionIndex(tank));
+        if (tank.kind == VehicleUnitKind::Rhino) {
+          renderState.turretRotationDegrees =
+            shortestAngleDelta(tank.headingRadians, tank.turretHeadingRadians) * 180.0f / kPi;
+        }
         drawRhinoUnit(renderer,
-                      rhinoRenderer,
+                      vehicleRenderer,
                       rhinoUiAssets,
                       tank,
                       mapOrigin,
@@ -1076,41 +1513,87 @@ int main(int, char**) {
                       viewport.width,
                       viewport.height,
                       nowTicks,
-                      buildRhinoTankRenderState(houseColors,
-                                                debugPanelState,
-                                                rhinoDirectionIndex(tank)));
+                      renderState);
+      };
+      auto warFactoryHasInternalTank = [&](const BuildingInstance& factory) {
+        for (const auto& tank : rhinoTanks) {
+          if (rhinoInsideWarFactoryFootprint(tank, factory)) {
+            return true;
+          }
+        }
+        return false;
       };
 
       renderer.beginWorldPass();
       for (const auto& command : renderQueue) {
-        renderer.beginWorldPass();
-        drawBuildingInstance(renderer,
-                             *command.asset,
-                             command.instance,
-                             mapOrigin,
-                             DemoAppConfig::kTileWidth,
-                             DemoAppConfig::kTileHeight,
-                             nowTicks,
-                             command.depth01,
-                             command.tintR,
-                             command.tintG,
-                             command.tintB,
-                             command.tintA);
+        const bool layeredWarFactory = isLayeredWarFactoryInstance(command.instance);
+        const bool hasInternalTank =
+          layeredWarFactory && warFactoryHasInternalTank(command.instance);
+        const bool sovietProductionSplit =
+          command.instance.assetId == "NAWEAP" && hasInternalTank;
 
-        if (isLayeredWarFactoryInstance(command.instance)) {
+        if (sovietProductionSplit) {
+          drawWarFactoryProductionUnderUnitLayers(renderer,
+                                                  *command.asset,
+                                                  command.instance,
+                                                  mapOrigin,
+                                                  DemoAppConfig::kTileWidth,
+                                                  DemoAppConfig::kTileHeight,
+                                                  nowTicks,
+                                                  command.depth01);
+        } else {
+          renderer.beginWorldPass();
+          drawBuildingInstance(renderer,
+                               *command.asset,
+                               command.instance,
+                               mapOrigin,
+                               DemoAppConfig::kTileWidth,
+                               DemoAppConfig::kTileHeight,
+                               nowTicks,
+                               command.depth01,
+                               command.tintR,
+                               command.tintG,
+                               command.tintB,
+                               command.tintA);
+        }
+
+        if (isCompleteGrandCannon(command.instance)) {
+          const auto anchor = grandCannonTurretAnchor(command.instance,
+                                                      mapOrigin,
+                                                      DemoAppConfig::kTileWidth,
+                                                      DemoAppConfig::kTileHeight);
+          const float turretDepth = grandCannonTurretDepth(command.instance.placement,
+                                                          DemoAppConfig::kTileWidth,
+                                                          DemoAppConfig::kTileHeight);
+          grandCannonRenderer.renderInWorld(grandCannonRenderState(houseColors,
+                                                                    debugPanelState,
+                                                                    command.instance),
+                                            viewport.width,
+                                            viewport.height,
+                                            anchor.x,
+                                            anchor.y,
+                                            turretDepth,
+                                            0.0f);
+          renderer.beginWorldPass();
+        }
+
+        if (layeredWarFactory) {
           for (const auto& tank : rhinoTanks) {
             if (rhinoInsideWarFactoryFootprint(tank, command.instance)) {
               drawRhinoTankInstance(tank);
             }
           }
-          drawWarFactoryOverUnitLayers(renderer,
-                                       *command.asset,
-                                       command.instance,
-                                       mapOrigin,
-                                       DemoAppConfig::kTileWidth,
-                                       DemoAppConfig::kTileHeight,
-                                       nowTicks,
-                                       command.depth01);
+          if (command.instance.assetId == "GAWEAP" || sovietProductionSplit) {
+            drawWarFactoryOverUnitLayers(renderer,
+                                         *command.asset,
+                                         command.instance,
+                                         mapOrigin,
+                                         DemoAppConfig::kTileWidth,
+                                         DemoAppConfig::kTileHeight,
+                                         nowTicks,
+                                         command.depth01,
+                                         sovietProductionSplit);
+          }
         }
       }
 
@@ -1137,6 +1620,15 @@ int main(int, char**) {
         }
         drawRhinoTankInstance(tank);
       }
+
+      renderer.beginWorldPass();
+      drawWeaponProjectilesAndEffects(renderer,
+                                      weaponVisualAssets,
+                                      projectiles,
+                                      combatEffects,
+                                      mapOrigin,
+                                      DemoAppConfig::kTileWidth,
+                                      DemoAppConfig::kTileHeight);
 
       if (mcvActive) {
         redrawBuildingOccludersForRhino(renderer,
@@ -1206,10 +1698,14 @@ int main(int, char**) {
                renderer,
                gridRenderer,
                rhinoRenderer,
+               grizzlyRenderer,
+               vehicleRendererCache,
+               grandCannonRenderer,
                mcvRenderer,
                sidebarAssets,
                buildingAssetCache,
-               rhinoUiAssets);
+               rhinoUiAssets,
+               weaponVisualAssets);
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
@@ -1218,10 +1714,14 @@ int main(int, char**) {
                renderer,
                gridRenderer,
                rhinoRenderer,
+               grizzlyRenderer,
+               vehicleRendererCache,
+               grandCannonRenderer,
                mcvRenderer,
                sidebarAssets,
                buildingAssetCache,
-               rhinoUiAssets);
+               rhinoUiAssets,
+               weaponVisualAssets);
     return 1;
   }
 }

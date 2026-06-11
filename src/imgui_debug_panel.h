@@ -33,6 +33,21 @@ struct GameplayDebugState {
   float speedMultiplier = 1.0f;
 };
 
+struct WeaponDebugState {
+  float rangeCells = 5.75f;
+  float rofFrames = 65.0f;
+  float rofFramesPerSecond = 15.0f;
+  float turretTurnSpeedRadiansPerSecond = 5.8f;
+  float fireTurnToleranceRadians = 0.08f;
+  float fireForwardLeptons = 150.0f;
+  float fireLateralLeptons = 0.0f;
+  float fireHeightLeptons = 100.0f;
+  float arcingSpeedLeptonsPerFrame = 50.0f;
+  float gravityLeptonsPerFrameSquared = 1.0f;
+  float projectileRulesFramesPerSecond = 30.0f;
+  float minDurationRulesFrames = 4.0f;
+};
+
 // 下面这些状态继续服务于 Rhino 载具实验渲染。
 struct RhinoPlacementDebugState {
   float footprintK = 1.0f;
@@ -70,6 +85,7 @@ struct ImGuiDebugPanelState {
   DemoVisualStyle style{};
   DisplayDebugState display{};
   GameplayDebugState gameplay{};
+  WeaponDebugState weapon{};
   RhinoPlacementDebugState rhinoPlacement{};
   RhinoTransformDebugState rhinoTransform{};
   RhinoLightingDebugState rhinoLighting{};

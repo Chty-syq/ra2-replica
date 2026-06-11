@@ -202,6 +202,22 @@ struct HouseColorGridMetrics {
                                         const ImGuiDebugPanelState& rhs) {
   return lhs.gameplay.speedMultiplier != rhs.gameplay.speedMultiplier;
 }
+
+[[nodiscard]] bool weaponStateChanged(const ImGuiDebugPanelState& lhs,
+                                      const ImGuiDebugPanelState& rhs) {
+  return lhs.weapon.rangeCells != rhs.weapon.rangeCells ||
+         lhs.weapon.rofFrames != rhs.weapon.rofFrames ||
+         lhs.weapon.rofFramesPerSecond != rhs.weapon.rofFramesPerSecond ||
+         lhs.weapon.turretTurnSpeedRadiansPerSecond != rhs.weapon.turretTurnSpeedRadiansPerSecond ||
+         lhs.weapon.fireTurnToleranceRadians != rhs.weapon.fireTurnToleranceRadians ||
+         lhs.weapon.fireForwardLeptons != rhs.weapon.fireForwardLeptons ||
+         lhs.weapon.fireLateralLeptons != rhs.weapon.fireLateralLeptons ||
+         lhs.weapon.fireHeightLeptons != rhs.weapon.fireHeightLeptons ||
+         lhs.weapon.arcingSpeedLeptonsPerFrame != rhs.weapon.arcingSpeedLeptonsPerFrame ||
+         lhs.weapon.gravityLeptonsPerFrameSquared != rhs.weapon.gravityLeptonsPerFrameSquared ||
+         lhs.weapon.projectileRulesFramesPerSecond != rhs.weapon.projectileRulesFramesPerSecond ||
+         lhs.weapon.minDurationRulesFrames != rhs.weapon.minDurationRulesFrames;
+}
 }  // namespace
 
 void initializeImGuiDebugPanel(SDL_Window* window, SDL_GLContext glContext) {
@@ -369,6 +385,42 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
     ImGui::TextColored(fpsColor, u8"当前帧率: %.1f FPS / %.2f ms", fps, frameMs);
     ImGui::Spacing();
 
+    if (beginSection(u8"武器弹道")) {
+      ImGui::TextDisabled("%s", u8"普通 120mm / Cannon / Arcing");
+      ImGui::SliderFloat(u8"射程(cells)", &state.weapon.rangeCells, 0.25f, 12.0f, "%.2f");
+      ImGui::SliderFloat(u8"ROF(帧)", &state.weapon.rofFrames, 1.0f, 180.0f, "%.0f");
+      ImGui::SliderFloat(u8"ROF帧率", &state.weapon.rofFramesPerSecond, 1.0f, 60.0f, "%.1f fps");
+      const float cooldownSeconds =
+        state.weapon.rofFrames / std::max(1.0f, state.weapon.rofFramesPerSecond);
+      ImGui::TextDisabled(u8"换算 CD: %.2fs", cooldownSeconds);
+
+      ImGui::Separator();
+      ImGui::TextUnformatted(u8"炮口 FLH");
+      float fireFlh[3] = {
+        state.weapon.fireForwardLeptons,
+        state.weapon.fireLateralLeptons,
+        state.weapon.fireHeightLeptons
+      };
+      if (ImGui::InputFloat3(u8"Forward / Lateral / Height", fireFlh, "%.1f")) {
+        state.weapon.fireForwardLeptons = fireFlh[0];
+        state.weapon.fireLateralLeptons = fireFlh[1];
+        state.weapon.fireHeightLeptons = std::max(0.0f, fireFlh[2]);
+      }
+
+      ImGui::Separator();
+      ImGui::TextUnformatted(u8"炮塔");
+      ImGui::SliderFloat(u8"炮塔转速", &state.weapon.turretTurnSpeedRadiansPerSecond, 0.1f, 16.0f, "%.2f rad/s");
+      ImGui::SliderAngle(u8"开火容差", &state.weapon.fireTurnToleranceRadians, 0.0f, 15.0f, "%.1f deg");
+
+      ImGui::Separator();
+      ImGui::TextUnformatted(u8"Arcing 物理");
+      ImGui::SliderFloat(u8"弹体速度", &state.weapon.arcingSpeedLeptonsPerFrame, 1.0f, 120.0f, "%.1f leptons/frame");
+      ImGui::SliderFloat(u8"重力", &state.weapon.gravityLeptonsPerFrameSquared, 0.1f, 24.0f, "%.2f");
+      ImGui::SliderFloat(u8"弹道帧率", &state.weapon.projectileRulesFramesPerSecond, 1.0f, 60.0f, "%.1f fps");
+      ImGui::SliderFloat(u8"最短飞行帧", &state.weapon.minDurationRulesFrames, 1.0f, 20.0f, "%.1f");
+      ImGui::TextDisabled(u8"原版参考: Range=5.75, ROF=65, ArcingSpeed=50, Gravity=6");
+    }
+
     if (beginSection(u8"渲染参数")) {
       ImGui::TextUnformatted(u8"法线表");
       int normalTableSelection = static_cast<int>(state.rhinoLighting.normalTableSelection);
@@ -413,6 +465,7 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
   return !sameVisualStyle(previousState.style, state.style) ||
          resolutionChanged(previousState, state) ||
          gameplayStateChanged(previousState, state) ||
+         weaponStateChanged(previousState, state) ||
          rhinoDebugStateChanged(previousState, state);
 }
 

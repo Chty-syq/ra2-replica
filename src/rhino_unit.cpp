@@ -191,16 +191,6 @@ void destroyTextures(std::vector<UiTexture>& textures) {
   return isSameCoord(coord, start) || isSameCoord(coord, goal) || map.isBuildable(coord);
 }
 
-[[nodiscard]] bool canWalkDiagonal(const MapGrid& map,
-                                   const TileCoord from,
-                                   const TileCoord to,
-                                   const TileCoord start,
-                                   const TileCoord goal) {
-  const TileCoord horizontal{to.x, from.y};
-  const TileCoord vertical{from.x, to.y};
-  return canWalkOn(map, horizontal, start, goal) && canWalkOn(map, vertical, start, goal);
-}
-
 [[nodiscard]] std::optional<TileCoord> findNearestReachableTarget(const MapGrid& map,
                                                                   const TileCoord start,
                                                                   const TileCoord requested) {
@@ -267,9 +257,8 @@ void destroyTextures(std::vector<UiTexture>& textures) {
     return {};
   }
 
-  // 这里先上一个小而稳的 A*：
-  // - 8 邻接，保证 Rhino 不会只会走“曼哈顿折线”
-  // - 斜走时要求水平/垂直邻格都可通行，避免穿角
+  // A* 使用真正的 8 邻接：斜向格与上下左右一样都是直接相邻格。
+  // 斜走只要求目标格本身可通行，避免坦克在空闲对角格前绕路。
   static constexpr std::array<TileCoord, 8> kNeighbors{{
     {1, 0}, {-1, 0}, {0, 1}, {0, -1},
     {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
@@ -295,9 +284,6 @@ void destroyTextures(std::vector<UiTexture>& textures) {
       const TileCoord next{current.x + offset.x, current.y + offset.y};
       const bool diagonal = offset.x != 0 && offset.y != 0;
       if (!canWalkOn(map, next, start, goal)) {
-        continue;
-      }
-      if (diagonal && !canWalkDiagonal(map, current, next, start, goal)) {
         continue;
       }
 
@@ -343,6 +329,12 @@ void applyPendingMoveAfterWaypoint(RhinoUnitState& unit, MapGrid& map) {
   if (!unit.hasPendingMove) {
     if (unit.path.empty()) {
       unit.finishPathBeforePendingMove = false;
+      if (unit.hasQueuedGroundFire) {
+        unit.groundFireActive = true;
+        unit.groundFireTarget = unit.queuedGroundFireTarget;
+        unit.hasQueuedGroundFire = false;
+        unit.nextGroundFireTicks = 0;
+      }
     }
     unit.steeringTarget = unit.occupiedCell;
     return;
@@ -356,7 +348,9 @@ void applyPendingMoveAfterWaypoint(RhinoUnitState& unit, MapGrid& map) {
   const TileCoord pendingTarget = unit.pendingMoveTarget;
   unit.hasPendingMove = false;
   unit.finishPathBeforePendingMove = false;
-  planRhinoMoveFromCurrentCell(unit, map, pendingTarget);
+  if (!planRhinoMoveFromCurrentCell(unit, map, pendingTarget)) {
+    unit.hasQueuedGroundFire = false;
+  }
 }
 
 [[nodiscard]] int quantizeDirectionIndex(const float radians) {
@@ -457,6 +451,7 @@ void initializeRhinoUnit(RhinoUnitState& unit, MapGrid& map, const TileCoord sta
   unit.tilePosition = Vec2{static_cast<float>(startCell.x), static_cast<float>(startCell.y)};
   unit.occupiedCell = startCell;
   unit.headingRadians = 0.0f;
+  unit.turretHeadingRadians = unit.headingRadians;
   unit.selected = false;
   unit.path.clear();
   unit.moveTarget = startCell;
@@ -466,6 +461,11 @@ void initializeRhinoUnit(RhinoUnitState& unit, MapGrid& map, const TileCoord sta
   unit.finishPathBeforePendingMove = false;
   unit.pendingMoveTarget = startCell;
   unit.waypointVisibleUntilTicks = 0;
+  unit.groundFireActive = false;
+  unit.groundFireTarget = unit.tilePosition;
+  unit.hasQueuedGroundFire = false;
+  unit.queuedGroundFireTarget = unit.tilePosition;
+  unit.nextGroundFireTicks = 0;
   map.setOccupied(std::vector<TileCoord>{startCell}, true);
 }
 
@@ -592,7 +592,14 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, const float deltaSecond
 bool issueRhinoMoveCommand(RhinoUnitState& unit,
                            const MapGrid& map,
                            const TileCoord targetCell,
-                           const std::uint32_t nowTicks) {
+                           const std::uint32_t nowTicks,
+                           const bool cancelGroundFire) {
+  if (cancelGroundFire) {
+    unit.groundFireActive = false;
+    unit.hasQueuedGroundFire = false;
+    unit.nextGroundFireTicks = 0;
+  }
+
   if (!unit.path.empty()) {
     unit.hasPendingMove = true;
     unit.pendingMoveTarget = targetCell;
@@ -615,6 +622,7 @@ int rhinoDirectionIndex(const RhinoUnitState& unit) {
 
 void setRhinoDirectionIndex(RhinoUnitState& unit, const int directionIndex) {
   unit.headingRadians = directionIndexToHeadingRadians(directionIndex);
+  unit.turretHeadingRadians = unit.headingRadians;
 }
 
 bool rotateRhinoTowardDirectionIndex(RhinoUnitState& unit,

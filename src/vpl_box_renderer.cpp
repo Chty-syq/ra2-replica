@@ -74,6 +74,7 @@ struct GlHandles {
   GLint transformRowsLocation = -1;
   GLint lightDirectionLocation = -1;
   GLint remapColorLocation = -1;
+  GLint modelOffsetLocation = -1;
   GLint scaleFactorLocation = -1;
   GLint canvasInfoLocation = -1;
   GLint projectionCenterLocation = -1;
@@ -84,6 +85,7 @@ struct GlHandles {
 
   GLint shadowTransformRowsLocation = -1;
   GLint shadowLightDirectionLocation = -1;
+  GLint shadowModelOffsetLocation = -1;
   GLint shadowScaleFactorLocation = -1;
   GLint shadowCanvasInfoLocation = -1;
   GLint shadowProjectionCenterLocation = -1;
@@ -133,6 +135,7 @@ layout(location = 2) in vec2 aVoxelMeta;
 uniform vec4 uTransformRows[4];
 uniform vec3 uLightDir;
 uniform vec3 uRemapColor;
+uniform vec3 uModelOffset;
 uniform float uScaleFactor;
 uniform vec3 uCanvasInfo;
 uniform vec2 uProjectionCenter;
@@ -203,6 +206,7 @@ void main() {
   vec4 modelPos = vec4(aVoxelPosition + aCorner, 1.0);
   vec4 voxelPos = mul_row_vec_mat4(modelPos);
   voxelPos.xyz *= vec3(uScaleFactor);
+  voxelPos.xyz += uModelOffset;
 
   vec3 rawNormal = mul_row_vec_mat4(vec4(uNormalTable[int(normalIndex)].xyz, 0.0)).xyz;
   vec3 normal = length(rawNormal) > 0.0001 ? normalize(rawNormal) : vec3(0.0, 0.0, 1.0);
@@ -259,6 +263,7 @@ layout(location = 0) in vec3 aCorner;
 layout(location = 1) in vec3 aVoxelPosition;
 
 uniform vec4 uTransformRows[4];
+uniform vec3 uModelOffset;
 uniform float uScaleFactor;
 uniform vec3 uCanvasInfo;
 uniform vec2 uProjectionCenter;
@@ -289,6 +294,7 @@ void main() {
   vec4 modelPos = vec4(aVoxelPosition + aCorner, 1.0);
   vec4 voxelPos = mul_row_vec_mat4(modelPos);
   voxelPos.xyz *= vec3(uScaleFactor);
+  voxelPos.xyz += uModelOffset;
 
   // 红警里的体素单位阴影更接近“垂直压到地面”的投影，
   // 不跟随实时光照方向去拉长。
@@ -730,6 +736,7 @@ void VplBoxRenderer::initialize(SDL_Window* window) {
   impl_->gl.transformRowsLocation = glGetUniformLocationPtr(impl_->gl.program, "uTransformRows[0]");
   impl_->gl.lightDirectionLocation = glGetUniformLocationPtr(impl_->gl.program, "uLightDir");
   impl_->gl.remapColorLocation = glGetUniformLocationPtr(impl_->gl.program, "uRemapColor");
+  impl_->gl.modelOffsetLocation = glGetUniformLocationPtr(impl_->gl.program, "uModelOffset");
   impl_->gl.scaleFactorLocation = glGetUniformLocationPtr(impl_->gl.program, "uScaleFactor");
   impl_->gl.canvasInfoLocation = glGetUniformLocationPtr(impl_->gl.program, "uCanvasInfo");
   impl_->gl.projectionCenterLocation = glGetUniformLocationPtr(impl_->gl.program, "uProjectionCenter");
@@ -739,6 +746,7 @@ void VplBoxRenderer::initialize(SDL_Window* window) {
   impl_->gl.vplTextureLocation = glGetUniformLocationPtr(impl_->gl.program, "uVplTexture");
   impl_->gl.shadowTransformRowsLocation = glGetUniformLocationPtr(impl_->gl.shadowProgram, "uTransformRows[0]");
   impl_->gl.shadowLightDirectionLocation = glGetUniformLocationPtr(impl_->gl.shadowProgram, "uLightDir");
+  impl_->gl.shadowModelOffsetLocation = glGetUniformLocationPtr(impl_->gl.shadowProgram, "uModelOffset");
   impl_->gl.shadowScaleFactorLocation = glGetUniformLocationPtr(impl_->gl.shadowProgram, "uScaleFactor");
   impl_->gl.shadowCanvasInfoLocation = glGetUniformLocationPtr(impl_->gl.shadowProgram, "uCanvasInfo");
   impl_->gl.shadowProjectionCenterLocation = glGetUniformLocationPtr(impl_->gl.shadowProgram, "uProjectionCenter");
@@ -840,6 +848,60 @@ void VplBoxRenderer::loadVehicleAssets(const std::filesystem::path& voxelRoot,
   loadOptionalPart(impl_->barrel, impl_->barrelNormalTypeIndex, barrelStem, "barrel");
   impl_->detectedNormalTableKind =
     tsVotes * 2 >= normalVotes ? VoxelNormalTableKind::TsIndex2 : VoxelNormalTableKind::Ra2Index4;
+
+  if (impl_->gl.vplTexture != 0) {
+    glDeleteTextures(1, &impl_->gl.vplTexture);
+    impl_->gl.vplTexture = 0;
+  }
+  impl_->gl.vplTexture = createVplTexture(vpl);
+}
+
+void VplBoxRenderer::loadTurretAssets(const std::filesystem::path& voxelRoot,
+                                      const VplFile& vpl,
+                                      const std::string& turretStem,
+                                      const std::string& barrelStem) {
+  if (!initialized_ || impl_ == nullptr) {
+    throw std::runtime_error("Renderer must be initialized before loading assets");
+  }
+  if (turretStem.empty()) {
+    throw std::runtime_error("Turret VXL stem must not be empty");
+  }
+
+  impl_->destroyPart(impl_->body);
+  impl_->destroyPart(impl_->turret);
+  impl_->destroyPart(impl_->barrel);
+  impl_->body = RhinoPartData{};
+  impl_->bodyNormalTypeIndex = 0;
+
+  int tsVotes = 0;
+  int normalVotes = 0;
+  auto loadOptionalPart = [&](RhinoPartData& part,
+                              std::uint8_t& normalTypeIndex,
+                              const std::string& stem,
+                              const char* label) {
+    normalTypeIndex = 0;
+    if (stem.empty()) {
+      part = RhinoPartData{};
+      return;
+    }
+
+    const auto vxl = VxlFile::load(voxelRoot / (stem + ".vxl"));
+    normalTypeIndex = vxl.normalTypeIndex();
+    const auto normalKind = detectVoxelNormalTableKind(normalTypeIndex);
+    tsVotes += static_cast<int>(normalKind == VoxelNormalTableKind::TsIndex2);
+    ++normalVotes;
+    part = RhinoPartData{
+      label,
+      HvaFile::load(voxelRoot / (stem + ".hva")),
+      buildSections(vxl)
+    };
+  };
+
+  loadOptionalPart(impl_->turret, impl_->turretNormalTypeIndex, turretStem, "turret");
+  loadOptionalPart(impl_->barrel, impl_->barrelNormalTypeIndex, barrelStem, "barrel");
+  impl_->detectedNormalTableKind =
+    normalVotes > 0 && tsVotes * 2 >= normalVotes ? VoxelNormalTableKind::TsIndex2
+                                                  : VoxelNormalTableKind::Ra2Index4;
 
   if (impl_->gl.vplTexture != 0) {
     glDeleteTextures(1, &impl_->gl.vplTexture);
@@ -983,6 +1045,10 @@ void VplBoxRenderer::renderToScreen(const VplBoxRendererState& state,
                  static_cast<float>(state.remapColor.r) / 255.0f,
                  static_cast<float>(state.remapColor.g) / 255.0f,
                  static_cast<float>(state.remapColor.b) / 255.0f);
+  glUniform3fPtr(impl_->gl.modelOffsetLocation,
+                 state.modelOffset[0],
+                 state.modelOffset[1],
+                 state.modelOffset[2]);
   glUniform1fPtr(impl_->gl.scaleFactorLocation, state.scaleFactor);
 
   const std::array<float, 3> canvasInfo{
@@ -1040,6 +1106,10 @@ UiTexture VplBoxRenderer::renderToTexture(const VplBoxRendererState& state, cons
                  static_cast<float>(state.remapColor.r) / 255.0f,
                  static_cast<float>(state.remapColor.g) / 255.0f,
                  static_cast<float>(state.remapColor.b) / 255.0f);
+  glUniform3fPtr(impl_->gl.modelOffsetLocation,
+                 state.modelOffset[0],
+                 state.modelOffset[1],
+                 state.modelOffset[2]);
   glUniform1fPtr(impl_->gl.scaleFactorLocation, state.scaleFactor);
 
   const std::array<float, 3> canvasInfo{
@@ -1101,6 +1171,10 @@ void VplBoxRenderer::renderShadowInWorld(const VplBoxRendererState& state,
   const float bodyRotation = -toRadians(state.bodyRotationDegrees);
 
   glUseProgramPtr(impl_->gl.shadowProgram);
+  glUniform3fPtr(impl_->gl.shadowModelOffsetLocation,
+                 state.modelOffset[0],
+                 state.modelOffset[1],
+                 state.modelOffset[2]);
   glUniform1fPtr(impl_->gl.shadowScaleFactorLocation, state.scaleFactor);
   const std::array<float, 3> canvasInfo{
     static_cast<float>(viewportWidth),
@@ -1159,6 +1233,10 @@ void VplBoxRenderer::renderInWorld(const VplBoxRendererState& state,
                  static_cast<float>(state.remapColor.r) / 255.0f,
                  static_cast<float>(state.remapColor.g) / 255.0f,
                  static_cast<float>(state.remapColor.b) / 255.0f);
+  glUniform3fPtr(impl_->gl.modelOffsetLocation,
+                 state.modelOffset[0],
+                 state.modelOffset[1],
+                 state.modelOffset[2]);
   glUniform1fPtr(impl_->gl.scaleFactorLocation, state.scaleFactor);
 
   const std::array<float, 3> canvasInfo{
