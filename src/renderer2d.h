@@ -62,6 +62,8 @@ public:
             const LogicalDepthParams& logicalDepth);
 
   void setIndexedPalettes(const Palette& unitPalette, const Palette& terrainPalette);
+  // RA2 minerals use theater overlay palettes without the building light scale.
+  void setResourcePalettes(const Palette& resourcePalette, const Palette& animationPalette);
   void setRemapColor(const Rgba& color) noexcept;
 
   [[nodiscard]] GLuint whiteTexture() const noexcept { return whiteTexture_; }
@@ -87,6 +89,8 @@ private:
   GLuint whiteTexture_ = 0;
   GLuint unitPaletteTexture_ = 0;
   GLuint terrainPaletteTexture_ = 0;
+  GLuint resourcePaletteTexture_ = 0;
+  GLuint animationPaletteTexture_ = 0;
   GLint viewportUniform_ = -1;
   GLint textureUniform_ = -1;
   GLint paletteUniform_ = -1;

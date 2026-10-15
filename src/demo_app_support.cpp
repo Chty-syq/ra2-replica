@@ -70,15 +70,18 @@ PaletteLibrary loadPaletteLibrary(const std::filesystem::path& paletteRoot) {
   return PaletteLibrary{
     TheaterPaletteSet{
       Palette::load(paletteRoot / "theater" / "unittem.pal"),
-      Palette::load(paletteRoot / "theater" / "isotem.pal")
+      Palette::load(paletteRoot / "theater" / "isotem.pal"),
+      Palette::load(paletteRoot / "resources" / "temperat.pal")
     },
     TheaterPaletteSet{
       Palette::load(paletteRoot / "theater" / "unitsno.pal"),
-      Palette::load(paletteRoot / "theater" / "isosno.pal")
+      Palette::load(paletteRoot / "theater" / "isosno.pal"),
+      Palette::load(paletteRoot / "resources" / "snow.pal")
     },
     TheaterPaletteSet{
       Palette::load(paletteRoot / "theater" / "uniturb.pal"),
-      Palette::load(paletteRoot / "theater" / "isourb.pal")
+      Palette::load(paletteRoot / "theater" / "isourb.pal"),
+      Palette::load(paletteRoot / "resources" / "urban.pal")
     }
   };
 }

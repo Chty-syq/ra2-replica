@@ -1,0 +1,7 @@
+scenario,before_frames,after_frames,before_wait_unit_frames,after_wait_unit_frames,before_travel_ratio,after_travel_ratio
+crossing_diagonals_2,70,50,45,25,0.987270,0.987270
+static_obstacle_9,497,485,443,415,1.108200,1.108210
+opposing_corridor_6,1352,892,1035,994,1.564240,1.172500
+crossing_16,743,701,1475,974,1.169270,1.138520
+compact_east_24,515,506,732,709,1.095920,1.095920
+spaced_diagonal_24,300,297,75,68,1.023040,1.023040

@@ -62,11 +62,18 @@ enum class VehicleUnitKind {
 // - 游戏层状态：选中、血量、移动目标
 // - 表现层状态：连续位置、朝向、移动命令提示
 struct RhinoUnitState {
+  // Presentation adapter identity. The application obtains all gameplay values
+  // from World snapshots; legacy helper tests may leave these empty.
+  std::uint64_t entityId = 0;
+  std::uint64_t exitFactoryId = 0;
+  std::uint32_t owner = 0;
+  std::string typeId;
   VehicleUnitKind kind = VehicleUnitKind::Rhino;
   Vec2 tilePosition{7.0f, 10.0f};
   TileCoord occupiedCell{7, 10};
   float headingRadians = 0.0f;
   float turretHeadingRadians = 0.0f;
+  float heightLeptons = 0.0f, pitchDegrees = 0.0f, rollDegrees = 0.0f;
   bool selected = false;
   int maxHp = 700;
   int hp = 700;

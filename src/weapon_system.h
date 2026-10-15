@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <vector>
 
 struct WeaponVisualAssets {
@@ -15,7 +16,9 @@ struct WeaponVisualAssets {
   std::vector<UiTexture> gunfireFrames;
   std::vector<UiTexture> explosionFrames;
   std::vector<UiTexture> explosionLargeFrames;
+  std::map<std::string,std::vector<UiTexture>> animations;
 };
+namespace ra2 { class DefinitionRegistry; }
 
 struct WeaponRuntimeParams {
   float rangeCells = 5.75f;
@@ -47,6 +50,9 @@ struct ProjectileInstance {
   float rulesFramesPerSecond = 30.0f;
   float elapsedSeconds = 0.0f;
   float durationSeconds = 0.25f;
+  bool simulated = false;
+  Vec2 logicalPosition{}, velocityLogical{};
+  float heightLeptons = 0, verticalVelocityLeptons = 0;
 };
 
 struct CombatEffectInstance {
@@ -57,10 +63,14 @@ struct CombatEffectInstance {
   float frameDurationSeconds = 0.04f;
   float lifetimeSeconds = 0.16f;
   int variant = 0;
+  std::string animation;
+  int animationFrame = -1;
+  float alpha = 1.0f;
 };
 
 [[nodiscard]] WeaponVisualAssets loadWeaponVisualAssets(const std::filesystem::path& effectsRoot,
-                                                        const Palette& animationPalette);
+                                                        const Palette& animationPalette,
+                                                        const ra2::DefinitionRegistry* definitions = nullptr);
 void destroyWeaponVisualAssets(WeaponVisualAssets& assets);
 
 [[nodiscard]] bool issueRhinoGroundFireCommand(RhinoUnitState& unit,

@@ -24,3 +24,6 @@
 [[nodiscard]] VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
                                                             const ImGuiDebugPanelState& debugPanelState,
                                                             float directionRadians);
+
+// Apply local chassis tilt before the world-facing and debug transforms.
+void applyRhinoSurfaceTilt(VplBoxRendererState& state, float pitchDegrees, float rollDegrees);

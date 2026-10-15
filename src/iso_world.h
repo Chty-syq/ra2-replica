@@ -30,10 +30,10 @@ struct BuildingRenderCommand {
 // 屏幕坐标 -> 近似地图格坐标。
 [[nodiscard]] TileCoord screenToIso(float screenX, float screenY, Vec2 origin, float tileWidth, float tileHeight);
 
-// 以锚点格为基准，生成一个 BuildingPlacement。
+// 以占地起始格为基准，生成一个 BuildingPlacement。
 [[nodiscard]] BuildingPlacement placementFromAnchor(const TileCoord& anchor, const FoundationSize& foundation);
 
-// 返回当前 demo 采用的建筑占地格集合。
+// 返回矩形 Foundation 的占地格集合，与 MapGrid 和模拟层共用实现。
 [[nodiscard]] std::vector<TileCoord> foundationTiles(const BuildingPlacement& placement);
 
 // 用地图逻辑坐标里的“占地中心点”计算深度。
@@ -41,8 +41,12 @@ struct BuildingRenderCommand {
 // 这样建筑和载具都能走同一套排序语义。
 [[nodiscard]] float depthFromLogicalCenter(Vec2 logicalCenter, float tileWidth, float tileHeight);
 
-// 根据 footprint 类型和 SHP 画布尺寸，计算建筑精灵对齐到地图时使用的锚点。
-[[nodiscard]] Vec2 spriteAnchorInFrame(const DecodedFrame& frame, const FoundationSize& foundation);
+// SHP 完整画布中心（整数除法）；解码器已恢复裁剪帧的 X/Y，不再重复相加。
+[[nodiscard]] Vec2 spriteAnchorInFrame(const DecodedFrame& frame);
+// 起始格上顶点是共同绘图中心。每层各自减去画布中心，再叠加配置的像素偏移。
+[[nodiscard]] Vec2 buildingDrawCenter(const BuildingPlacement& placement, Vec2 origin, float tileWidth, float tileHeight);
+[[nodiscard]] Vec2 buildingSpriteTopLeft(Vec2 drawCenter, int canvasWidth, int canvasHeight, PixelOffset offset = {});
+[[nodiscard]] LogicalDepthParams buildingLogicalDepth(const BuildingPlacement& placement, float tileWidth, float tileHeight);
 
 // 把建筑实例包装成渲染命令，并计算深度和 tint。
 [[nodiscard]] BuildingRenderCommand makeBuildingRenderCommand(const BuildingAsset& asset,

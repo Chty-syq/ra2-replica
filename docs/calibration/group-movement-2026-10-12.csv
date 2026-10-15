@@ -1,0 +1,8 @@
+scenario,units,completion_frames,wait_unit_frames,longest_stationary_frames,yields,travel_to_straight_line_ratio,max_path_expansions,max_assignment_expansions,max_world_step_ms,build
+mixed_speeds,9,647,491,96,1,1.04807,154,1447,1.9525,Release_GCC_13.1
+head_on_passing_bay,2,497,120,86,1,1.76244,20,0,0.0524,Release_GCC_13.1
+opposing_corridor_groups,6,1392,1240,382,19,1.388,118,338,1.0079,Release_GCC_13.1
+crossing,16,1241,1617,263,25,1.15505,272,0,0.57,Release_GCC_13.1
+enclosed_target,2,103,0,0,0,1.03578,22,309,0.4485,Release_GCC_13.1
+large_formation,24,432,665,83,6,1.06252,682,4849,5.5261,Release_GCC_13.1
+independent_groups_shared_target,6,226,67,66,2,1.15598,61,326,0.5326,Release_GCC_13.1

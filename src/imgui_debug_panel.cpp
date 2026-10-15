@@ -13,6 +13,7 @@
 #include <stdexcept>
 
 namespace {
+// ImGui expects UTF-8 char strings; the build sets the source/execution encoding.
 constexpr float kPanelX = 16.0f;
 constexpr float kPanelY = 16.0f;
 constexpr float kPanelWidth = 392.0f;
@@ -25,19 +26,19 @@ bool gDebugPanelInitialized = false;
 
 [[nodiscard]] const char* theaterLabel(const TheaterStyle theater) {
   switch (theater) {
-    case TheaterStyle::Temperate: return u8"温带";
-    case TheaterStyle::Snow: return u8"雪地";
-    case TheaterStyle::Urban: return u8"城市";
+    case TheaterStyle::Temperate: return "温带";
+    case TheaterStyle::Snow: return "雪地";
+    case TheaterStyle::Urban: return "城市";
   }
-  return u8"温带";
+  return "温带";
 }
 
 [[nodiscard]] const char* factionLabel(const BuildFaction faction) {
   switch (faction) {
-    case BuildFaction::Allied: return u8"盟军";
-    case BuildFaction::Soviet: return u8"苏军";
+    case BuildFaction::Allied: return "盟军";
+    case BuildFaction::Soviet: return "苏军";
   }
-  return u8"盟军";
+  return "盟军";
 }
 
 [[nodiscard]] ImVec4 toImGuiColor(const Rgba color) {
@@ -138,7 +139,7 @@ struct HouseColorGridMetrics {
 
 [[nodiscard]] bool drawHouseColorSwatches(std::size_t& selectedIndex, const HouseColorSet& houseColors) {
   if (houseColors.colors.empty()) {
-    ImGui::TextDisabled("%s", u8"无可用国家色");
+    ImGui::TextDisabled("%s", "无可用国家色");
     return false;
   }
 
@@ -200,7 +201,7 @@ struct HouseColorGridMetrics {
 
 [[nodiscard]] bool gameplayStateChanged(const ImGuiDebugPanelState& lhs,
                                         const ImGuiDebugPanelState& rhs) {
-  return lhs.gameplay.speedMultiplier != rhs.gameplay.speedMultiplier;
+  return lhs.gameplay.speed != rhs.gameplay.speed;
 }
 
 [[nodiscard]] bool weaponStateChanged(const ImGuiDebugPanelState& lhs,
@@ -318,22 +319,22 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
     ImGuiWindowFlags_NoResize |
     ImGuiWindowFlags_NoMove;
 
-  if (ImGui::Begin(u8"调试面板", nullptr, kWindowFlags)) {
+  if (ImGui::Begin("调试面板", nullptr, kWindowFlags)) {
     ImGui::BeginChild("##PanelScroll", ImVec2(0.0f, 0.0f), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-    if (beginSection(u8"场景设置")) {
-      ImGui::TextUnformatted(u8"国家色");
+    if (beginSection("场景设置")) {
+      ImGui::TextUnformatted("国家色");
       const auto metrics =
         computeHouseColorGridMetrics(ImGui::GetContentRegionAvail().x, houseColors.colors.size());
       ImGui::BeginChild("##HouseColors",
                         ImVec2(0.0f, metrics.childHeight),
                         true,
                         ImGuiWindowFlags_NoScrollbar);
-      drawHouseColorSwatches(state.style.houseColorIndex, houseColors);
+      (void)drawHouseColorSwatches(state.style.houseColorIndex, houseColors);
       ImGui::EndChild();
 
       ImGui::Spacing();
-      ImGui::TextUnformatted(u8"阵营");
+      ImGui::TextUnformatted("阵营");
       for (std::size_t index = 0; index < std::size(kAllBuildFactions); ++index) {
         const BuildFaction faction = kAllBuildFactions[index];
         if (index > 0) {
@@ -345,7 +346,7 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
       }
 
       ImGui::Spacing();
-      ImGui::TextUnformatted(u8"剧场风格");
+      ImGui::TextUnformatted("剧场风格");
       for (std::size_t index = 0; index < std::size(kAllTheaterStyles); ++index) {
         const TheaterStyle theater = kAllTheaterStyles[index];
         if (index > 0) {
@@ -360,7 +361,7 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
     int resolutionIndex = static_cast<int>(state.display.resolutionIndex);
     const auto safeResolutionIndex =
       std::clamp(resolutionIndex, 0, static_cast<int>(std::size(kDisplayResolutionOptions) - 1));
-    if (ImGui::BeginCombo(u8"分辨率", kDisplayResolutionOptions[safeResolutionIndex].label)) {
+    if (ImGui::BeginCombo("分辨率", kDisplayResolutionOptions[safeResolutionIndex].label)) {
       for (int index = 0; index < static_cast<int>(std::size(kDisplayResolutionOptions)); ++index) {
         const bool selected = safeResolutionIndex == index;
         if (ImGui::Selectable(kDisplayResolutionOptions[index].label, selected)) {
@@ -373,7 +374,7 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
       ImGui::EndCombo();
     }
     state.display.resolutionIndex = static_cast<std::size_t>(std::clamp(resolutionIndex, 0, static_cast<int>(std::size(kDisplayResolutionOptions) - 1)));
-    ImGui::SliderFloat(u8"游戏速度", &state.gameplay.speedMultiplier, 0.25f, 3.0f, "%.2fx");
+    drawGameSpeedControls(state.gameplay);
 
     const float fps = ImGui::GetIO().Framerate;
     const float frameMs = 1000.0f / std::max(fps, 0.001f);
@@ -382,47 +383,16 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
                                 : (fps >= 30.0f
                                 ? ImVec4(0.95f, 0.78f, 0.35f, 1.0f)
                                 : ImVec4(0.95f, 0.36f, 0.32f, 1.0f));
-    ImGui::TextColored(fpsColor, u8"当前帧率: %.1f FPS / %.2f ms", fps, frameMs);
+    ImGui::TextColored(fpsColor, "当前帧率: %.1f FPS / %.2f ms", fps, frameMs);
     ImGui::Spacing();
 
-    if (beginSection(u8"武器弹道")) {
-      ImGui::TextDisabled("%s", u8"普通 120mm / Cannon / Arcing");
-      ImGui::SliderFloat(u8"射程(cells)", &state.weapon.rangeCells, 0.25f, 12.0f, "%.2f");
-      ImGui::SliderFloat(u8"ROF(帧)", &state.weapon.rofFrames, 1.0f, 180.0f, "%.0f");
-      ImGui::SliderFloat(u8"ROF帧率", &state.weapon.rofFramesPerSecond, 1.0f, 60.0f, "%.1f fps");
-      const float cooldownSeconds =
-        state.weapon.rofFrames / std::max(1.0f, state.weapon.rofFramesPerSecond);
-      ImGui::TextDisabled(u8"换算 CD: %.2fs", cooldownSeconds);
-
-      ImGui::Separator();
-      ImGui::TextUnformatted(u8"炮口 FLH");
-      float fireFlh[3] = {
-        state.weapon.fireForwardLeptons,
-        state.weapon.fireLateralLeptons,
-        state.weapon.fireHeightLeptons
-      };
-      if (ImGui::InputFloat3(u8"Forward / Lateral / Height", fireFlh, "%.1f")) {
-        state.weapon.fireForwardLeptons = fireFlh[0];
-        state.weapon.fireLateralLeptons = fireFlh[1];
-        state.weapon.fireHeightLeptons = std::max(0.0f, fireFlh[2]);
-      }
-
-      ImGui::Separator();
-      ImGui::TextUnformatted(u8"炮塔");
-      ImGui::SliderFloat(u8"炮塔转速", &state.weapon.turretTurnSpeedRadiansPerSecond, 0.1f, 16.0f, "%.2f rad/s");
-      ImGui::SliderAngle(u8"开火容差", &state.weapon.fireTurnToleranceRadians, 0.0f, 15.0f, "%.1f deg");
-
-      ImGui::Separator();
-      ImGui::TextUnformatted(u8"Arcing 物理");
-      ImGui::SliderFloat(u8"弹体速度", &state.weapon.arcingSpeedLeptonsPerFrame, 1.0f, 120.0f, "%.1f leptons/frame");
-      ImGui::SliderFloat(u8"重力", &state.weapon.gravityLeptonsPerFrameSquared, 0.1f, 24.0f, "%.2f");
-      ImGui::SliderFloat(u8"弹道帧率", &state.weapon.projectileRulesFramesPerSecond, 1.0f, 60.0f, "%.1f fps");
-      ImGui::SliderFloat(u8"最短飞行帧", &state.weapon.minDurationRulesFrames, 1.0f, 20.0f, "%.1f");
-      ImGui::TextDisabled(u8"原版参考: Range=5.75, ROF=65, ArcingSpeed=50, Gravity=6");
+    if (beginSection("单位规则")) {
+      ImGui::TextWrapped("%s", "生命值、速度、射程与武器来自 rules.ini。修改配置后重启场景生效。");
+      ImGui::TextWrapped("%s", "时间与速度换算采用 replica.ini 中的暂定兼容参数，尚未与原版实测校准。");
     }
 
-    if (beginSection(u8"渲染参数")) {
-      ImGui::TextUnformatted(u8"法线表");
+    if (beginSection("渲染参数")) {
+      ImGui::TextUnformatted("法线表");
       int normalTableSelection = static_cast<int>(state.rhinoLighting.normalTableSelection);
       if (ImGui::RadioButton("Auto", normalTableSelection == 0)) {
         normalTableSelection = 0;
@@ -438,24 +408,24 @@ bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& house
       state.rhinoLighting.normalTableSelection =
         static_cast<VoxelNormalTableSelection>(normalTableSelection);
 
-      ImGui::TextUnformatted(u8"光照参数");
-      ImGui::SliderFloat(u8"环境光", &state.rhinoLighting.extraLight, -0.25f, 1.0f, "%.3f");
+      ImGui::TextUnformatted("光照参数");
+      ImGui::SliderFloat("环境光", &state.rhinoLighting.extraLight, -0.25f, 1.0f, "%.3f");
 
       float lightDirection[3] = {
         state.rhinoLighting.lightDirX,
         state.rhinoLighting.lightDirY,
         state.rhinoLighting.lightDirZ
       };
-      if (ImGui::InputFloat3(u8"光照方向", lightDirection, "%.4f")) {
+      if (ImGui::InputFloat3("光照方向", lightDirection, "%.4f")) {
         state.rhinoLighting.lightDirX = lightDirection[0];
         state.rhinoLighting.lightDirY = lightDirection[1];
         state.rhinoLighting.lightDirZ = lightDirection[2];
       }
 
-      ImGui::TextUnformatted(u8"阴影参数");
-      ImGui::SliderFloat(u8"透明度", &state.rhinoShadow.alpha, 0.0f, 1.0f, "%.3f");
-      ImGui::SliderFloat(u8"灰度", &state.rhinoShadow.gray, 0.0f, 1.0f, "%.3f");
-      ImGui::SliderFloat(u8"深度偏移", &state.rhinoShadow.depthBias01, 0.0f, 0.02f, "%.4f");
+      ImGui::TextUnformatted("阴影参数");
+      ImGui::SliderFloat("透明度", &state.rhinoShadow.alpha, 0.0f, 1.0f, "%.3f");
+      ImGui::SliderFloat("灰度", &state.rhinoShadow.gray, 0.0f, 1.0f, "%.3f");
+      ImGui::SliderFloat("深度偏移", &state.rhinoShadow.depthBias01, 0.0f, 0.02f, "%.4f");
     }
 
     ImGui::EndChild();
@@ -490,4 +460,14 @@ bool imguiDebugPanelContainsPoint(const ImGuiDebugPanelState& state,
                                   const float mouseX,
                                   const float mouseY) {
   return state.visible && pointInPanelBounds(mouseX, mouseY);
+}
+void drawGameSpeedControls(GameplayDebugState& state) {
+  int mode = state.speed.mode == ra2::GameSpeedMode::Singleplayer ? 1 : 0;
+  if (ImGui::Combo("速度规则", &mode, "对战档位\0单人档位\0"))
+    state.speed.mode = mode == 0 ? ra2::GameSpeedMode::Multiplayer : ra2::GameSpeedMode::Singleplayer;
+  ImGui::SliderInt("游戏速度", &state.speed.level, 0, 6, "%d 速");
+  if (const auto rate = ra2::targetGameFrameRate(state.speed))
+    ImGui::Text("目标逻辑帧率：%d 帧/秒", *rate);
+  else
+    ImGui::TextUnformatted("最高速：不限逻辑帧率");
 }

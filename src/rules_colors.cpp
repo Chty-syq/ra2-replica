@@ -182,6 +182,22 @@ HouseColorSet loadHouseColors(const std::filesystem::path& rulesIniPath) {
   return result;
 }
 
+HouseColorSet loadHouseColors(const ra2::IniDocument& rules) {
+  HouseColorSet result;
+  // Preserve file order for the palette selector while sharing the parsed rules.
+  std::vector<std::pair<std::string, const ra2::IniValue*>> colors;
+  for (const auto& [name, value] : rules.section("Colors")) colors.emplace_back(name, &value);
+  std::stable_sort(colors.begin(), colors.end(), [](const auto& a, const auto& b) { return a.second->line < b.second->line; });
+  for (const auto& [name, value] : colors) {
+    if (const auto hsv = parseHsvTriplet(value->text)) {
+      result.colors.push_back({name, toHsvColor(*hsv), hsvToRgb565(*hsv)});
+      if (name == "DARKBLUE") result.defaultIndex = result.colors.size() - 1;
+    }
+  }
+  if (result.colors.empty()) result.colors.push_back({"DarkBlue", {153,214,212}, {68,126,255,255}});
+  return result;
+}
+
 std::unordered_map<std::string, int> loadObjectStrengths(const std::filesystem::path& rulesIniPath) {
   std::ifstream input(rulesIniPath);
   if (!input) {

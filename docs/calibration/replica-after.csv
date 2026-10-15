@@ -1,0 +1,12 @@
+type,scenario,game_frames,seconds_at_60,seconds_at_30
+HTNK,straight_10_cells_from_rest,171,2.85,5.7
+HTNK,single_factory_first_internal_spawn,540,9,18
+HTNK,turret_90_degrees_first_shot,13,0.216667,0.433333
+MTNK,straight_10_cells_from_rest,151,2.51667,5.03333
+MTNK,single_factory_first_internal_spawn,432,7.2,14.4
+MTNK,turret_90_degrees_first_shot,13,0.216667,0.433333
+AMCV,straight_10_cells_from_rest,256,4.26667,8.53333
+AMCV,single_factory_first_internal_spawn,1890,31.5,63
+GAPOWR,placed_building_becomes_complete,54,0.9,1.8
+GAWEAP,placed_building_becomes_complete,54,0.9,1.8
+NAWEAP,placed_building_becomes_complete,54,0.9,1.8

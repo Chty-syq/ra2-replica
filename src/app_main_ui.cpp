@@ -13,12 +13,18 @@
 #include "vpl_box_renderer.h"
 #include "voxel_unit.h"
 #include "weapon_system.h"
+#include "presentation/world_view.h"
+#include "presentation/resource_view.h"
+#include "interaction/unit_selection.h"
+#include <imgui.h>
 
 #include <SDL.h>
 #include <SDL_opengl.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <iterator>
@@ -31,90 +37,28 @@
 #include <vector>
 
 namespace {
-struct ViewportState {
-  int width = DemoAppConfig::kViewportWidth;
-  int height = DemoAppConfig::kViewportHeight;
-};
-
-struct SimulationFrame {
-  std::uint32_t nowTicks = 0;
-  float deltaSeconds = 0.0f;
-};
-
-enum class McvTransitionPhase {
-  None,
-  TurningToDeploy,
-  PackingToVehicle
-};
-
-struct McvTransitionState {
-  McvTransitionPhase phase = McvTransitionPhase::None;
-  BuildFaction faction = BuildFaction::Allied;
-  BuildingPlacement placement{};
-  TileCoord pendingMoveTarget{};
-  std::size_t buildingIndex = 0;
-  float hpRatio = 1.0f;
-};
-
-struct WarFactoryProductionState {
-  bool active = false;
-  BuildingPlacement factoryPlacement{};
-  TileCoord exitCell{};
-  std::size_t tankIndex = 0;
-};
-
-struct VehicleRenderSpec {
-  VehicleUnitKind kind;
-  BuildFaction faction;
-  std::string_view iconId;
-  std::string_view objectId;
-  std::string_view folder;
-  std::string_view bodyStem;
-  std::string_view turretStem;
-  std::string_view barrelStem;
-};
-
-struct VehicleRendererCache {
-  std::unordered_map<int, std::unique_ptr<VplBoxRenderer>> renderers;
-};
-
-constexpr int kMcvDeployDirectionIndex = 12;
-constexpr int kWarFactoryExitDirectionIndex = 0;
-constexpr std::uint32_t kBuildingBuildupFrameDurationMs = 50;
+struct ViewportState { int width = DemoAppConfig::kViewportWidth; int height = DemoAppConfig::kViewportHeight; };
+struct VehicleRendererCache { std::unordered_map<std::string, std::unique_ptr<VplBoxRenderer>> renderers; };
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kTwoPi = 2.0f * kPi;
-constexpr float kGrandCannonTurnSpeedRadiansPerSecond = 1.6f;
-
-constexpr VehicleRenderSpec kVehicleRenderSpecs[] = {
-  {VehicleUnitKind::AlliedHarvester, BuildFaction::Allied, "ahrvicon", "CMIN", "allied_harvester", "cmin", "", ""},
-  {VehicleUnitKind::Grizzly, BuildFaction::Allied, "gtnkicon", "MTNK", "grizzly_tank", "gtnk", "gtnktur", "gtnkbarl"},
-  {VehicleUnitKind::Ifv, BuildFaction::Allied, "fvicon", "FV", "ifv", "fv", "fvtur", ""},
-  {VehicleUnitKind::TankDestroyer, BuildFaction::Allied, "tnkdicon", "TNKD", "tank_destroyer", "tnkd", "", ""},
-  {VehicleUnitKind::BlackEagle, BuildFaction::Allied, "beagicon", "BEAG", "black_eagle", "beag", "", ""},
-  {VehicleUnitKind::PrismTank, BuildFaction::Allied, "sreficon", "SREF", "prism_tank", "sref", "sreftur", ""},
-  {VehicleUnitKind::MirageTank, BuildFaction::Allied, "rtnkicon", "RTNK", "mirage_tank", "rtnk", "rtnktur", "rtnkbarl"},
-  {VehicleUnitKind::AlliedMcv, BuildFaction::Allied, "mcvicon", "AMCV", "allied_mcv", "mcv", "", ""},
-  {VehicleUnitKind::Intruder, BuildFaction::Allied, "falcicon", "FALC", "intruder", "falc", "", ""},
-  {VehicleUnitKind::BlackHawk, BuildFaction::Allied, "shadicon", "SHAD", "blackhawk", "shad", "", ""},
-  {VehicleUnitKind::LandingCraft, BuildFaction::Allied, "landicon", "LCRF", "landing_craft", "lcrf", "", ""},
-  {VehicleUnitKind::Destroyer, BuildFaction::Allied, "desticon", "DEST", "destroyer", "dest", "", ""},
-  {VehicleUnitKind::AegisCruiser, BuildFaction::Allied, "agisicon", "AEGIS", "aegis_cruiser", "aegis", "", ""},
-  {VehicleUnitKind::AircraftCarrier, BuildFaction::Allied, "carricon", "CARRIER", "aircraft_carrier", "carrier", "", ""},
-  {VehicleUnitKind::SovietHarvester, BuildFaction::Soviet, "harvicon", "HARV", "soviet_harvester", "harv", "harvtur", ""},
-  {VehicleUnitKind::Rhino, BuildFaction::Soviet, "htnkicon", "HTNK", "rhino_tank", "htnk", "htnktur", "htnkbarl"},
-  {VehicleUnitKind::V3Launcher, BuildFaction::Soviet, "v3icon", "V3", "v3_launcher", "v3", "", ""},
-  {VehicleUnitKind::FlakTrack, BuildFaction::Soviet, "htkicon", "HTK", "flak_track", "htk", "htktur", "htkbarl"},
-  {VehicleUnitKind::TeslaTank, BuildFaction::Soviet, "ttnkicon", "TTNK", "tesla_tank", "ttnk", "ttnktur", ""},
-  {VehicleUnitKind::ApocalypseTank, BuildFaction::Soviet, "mtnkicon", "APOC", "apocalypse_tank", "mtnk", "mtnktur", "mtnkbarl"},
-  {VehicleUnitKind::AmphibiousTransport, BuildFaction::Soviet, "sapcicon", "SAPC", "amphibious_transport", "trs", "", ""},
-  {VehicleUnitKind::Submarine, BuildFaction::Soviet, "subicon", "SUB", "submarine", "sub", "", ""},
-  {VehicleUnitKind::Dreadnought, BuildFaction::Soviet, "dredicon", "DRED", "dreadnought", "dred", "", ""},
-  {VehicleUnitKind::KirovAirship, BuildFaction::Soviet, "zepicon", "ZEP", "kirov_airship", "zep", "", ""},
-  {VehicleUnitKind::SovietMcv, BuildFaction::Soviet, "mcvicon", "SMCV", "soviet_mcv", "smcv", "", ""}
-};
-
-void destroyVehicleRendererCache(VehicleRendererCache& cache);
-
+void destroyVehicleRendererCache(VehicleRendererCache& cache) {
+  for (auto& [id, renderer] : cache.renderers) { (void)id; renderer->destroy(); }
+  cache.renderers.clear();
+}
+void setVehicleRendererCachePalette(VehicleRendererCache& cache, const Palette& palette) {
+  for (auto& [id, renderer] : cache.renderers) { (void)id; renderer->setPalette(palette); }
+}
+VplBoxRenderer& vehicleRendererForType(const ra2::UnitTypeDef& type, VehicleRendererCache& cache,
+                                      SDL_Window* window, const DemoAppPaths& paths,
+                                      const VplFile& lighting, const Palette& palette) {
+  if (const auto it = cache.renderers.find(type.id); it != cache.renderers.end()) return *it->second;
+  if (type.visual.folder.empty() || type.visual.body.empty()) throw std::runtime_error("Missing visual mapping: " + type.id);
+  auto renderer = std::make_unique<VplBoxRenderer>();
+  renderer->initialize(window);
+  renderer->loadVehicleAssets(paths.vehicleRoot / type.visual.folder, lighting, type.visual.body, type.visual.turret, type.visual.barrel);
+  renderer->setPalette(palette);
+  return *cache.renderers.emplace(type.id, std::move(renderer)).first->second;
+}
 void cleanupApp(SDL_Window*& window,
                 SDL_GLContext& glContext,
                 Renderer2D& renderer,
@@ -127,8 +71,10 @@ void cleanupApp(SDL_Window*& window,
                 SidebarAssets& sidebarAssets,
                 BuildingAssetCache& buildingAssetCache,
                 RhinoUnitUiAssets& rhinoUiAssets,
-                WeaponVisualAssets& weaponVisualAssets) {
+                WeaponVisualAssets& weaponVisualAssets,
+                ra2::ResourceVisualAssets& resourceVisualAssets) {
   shutdownImGuiDebugPanel();
+  ra2::destroyResourceVisualAssets(resourceVisualAssets);
   destroyWeaponVisualAssets(weaponVisualAssets);
   destroySidebarAssets(sidebarAssets);
   destroyBuildingAssetCache(buildingAssetCache);
@@ -164,37 +110,12 @@ void cleanupApp(SDL_Window*& window,
   return Vec2{viewport.width * 0.5f, DemoAppConfig::kMapOrigin.y};
 }
 
-[[nodiscard]] WeaponRuntimeParams weaponParamsFromDebugState(const WeaponDebugState& state) {
-  return WeaponRuntimeParams{
-    state.rangeCells,
-    state.rofFrames,
-    state.rofFramesPerSecond,
-    state.turretTurnSpeedRadiansPerSecond,
-    state.fireTurnToleranceRadians,
-    state.fireForwardLeptons,
-    state.fireLateralLeptons,
-    state.fireHeightLeptons,
-    state.arcingSpeedLeptonsPerFrame,
-    state.gravityLeptonsPerFrameSquared,
-    state.projectileRulesFramesPerSecond,
-    state.minDurationRulesFrames
-  };
-}
-
 [[nodiscard]] const char* defaultPowerPlantId(const BuildFaction faction) {
   switch (faction) {
     case BuildFaction::Allied: return "GAPOWR";
     case BuildFaction::Soviet: return "NAPOWR";
   }
   return "GAPOWR";
-}
-
-[[nodiscard]] const char* constructionYardIdForFaction(const BuildFaction faction) {
-  switch (faction) {
-    case BuildFaction::Allied: return "GACNST";
-    case BuildFaction::Soviet: return "NACNST";
-  }
-  return "GACNST";
 }
 
 [[nodiscard]] const char* mcvUnitIdForFaction(const BuildFaction faction) {
@@ -205,185 +126,8 @@ void cleanupApp(SDL_Window*& window,
   return "AMCV";
 }
 
-[[nodiscard]] const char* mcvVoxelStemForFaction(const BuildFaction faction) {
-  switch (faction) {
-    case BuildFaction::Allied: return "mcv";
-    case BuildFaction::Soviet: return "smcv";
-  }
-  return "mcv";
-}
-
-[[nodiscard]] const char* warFactoryIdForFaction(const BuildFaction faction) {
-  switch (faction) {
-    case BuildFaction::Allied: return "GAWEAP";
-    case BuildFaction::Soviet: return "NAWEAP";
-  }
-  return "GAWEAP";
-}
-
-[[nodiscard]] int vehicleRendererCacheKey(const VehicleUnitKind kind) {
-  return static_cast<int>(kind);
-}
-
-[[nodiscard]] bool usesDedicatedVehicleRenderer(const VehicleUnitKind kind) {
-  return kind == VehicleUnitKind::Rhino || kind == VehicleUnitKind::Grizzly;
-}
-
-[[nodiscard]] const VehicleRenderSpec* vehicleSpecForKind(const VehicleUnitKind kind) {
-  for (const auto& spec : kVehicleRenderSpecs) {
-    if (spec.kind == kind) {
-      return &spec;
-    }
-  }
-  return nullptr;
-}
-
-[[nodiscard]] const VehicleRenderSpec* vehicleSpecForProductionIcon(const std::string_view iconId,
-                                                                    const BuildFaction faction) {
-  for (const auto& spec : kVehicleRenderSpecs) {
-    if (spec.faction == faction && spec.iconId == iconId) {
-      return &spec;
-    }
-  }
-  return nullptr;
-}
-
-VplBoxRenderer& ensureCachedVehicleRenderer(VehicleRendererCache& cache,
-                                            SDL_Window* window,
-                                            const DemoAppPaths& paths,
-                                            const VplFile& voxelLighting,
-                                            const Palette& unitPalette,
-                                            const VehicleUnitKind kind) {
-  const int cacheKey = vehicleRendererCacheKey(kind);
-  if (const auto it = cache.renderers.find(cacheKey); it != cache.renderers.end()) {
-    return *it->second;
-  }
-
-  const auto* spec = vehicleSpecForKind(kind);
-  if (spec == nullptr) {
-    throw std::runtime_error("Missing vehicle render spec");
-  }
-
-  auto renderer = std::make_unique<VplBoxRenderer>();
-  renderer->initialize(window);
-  renderer->loadVehicleAssets(paths.vehicleRoot / std::string(spec->folder),
-                              voxelLighting,
-                              std::string(spec->bodyStem),
-                              std::string(spec->turretStem),
-                              std::string(spec->barrelStem));
-  renderer->setPalette(unitPalette);
-
-  auto [it, inserted] = cache.renderers.emplace(cacheKey, std::move(renderer));
-  (void)inserted;
-  return *it->second;
-}
-
-void preloadVehicleRenderers(VehicleRendererCache& cache,
-                             SDL_Window* window,
-                             const DemoAppPaths& paths,
-                             const VplFile& voxelLighting,
-                             const Palette& unitPalette) {
-  for (const auto& spec : kVehicleRenderSpecs) {
-    if (!usesDedicatedVehicleRenderer(spec.kind)) {
-      ensureCachedVehicleRenderer(cache, window, paths, voxelLighting, unitPalette, spec.kind);
-    }
-  }
-}
-
-void setVehicleRendererCachePalette(VehicleRendererCache& cache, const Palette& unitPalette) {
-  for (auto& [cacheKey, renderer] : cache.renderers) {
-    (void)cacheKey;
-    renderer->setPalette(unitPalette);
-  }
-}
-
-void destroyVehicleRendererCache(VehicleRendererCache& cache) {
-  for (auto& [cacheKey, renderer] : cache.renderers) {
-    (void)cacheKey;
-    renderer->destroy();
-  }
-  cache.renderers.clear();
-}
-
-VplBoxRenderer& vehicleRendererForKind(const VehicleUnitKind kind,
-                                       VplBoxRenderer& rhinoRenderer,
-                                       VplBoxRenderer& grizzlyRenderer,
-                                       VehicleRendererCache& cache,
-                                       SDL_Window* window,
-                                       const DemoAppPaths& paths,
-                                       const VplFile& voxelLighting,
-                                       const Palette& unitPalette) {
-  switch (kind) {
-    case VehicleUnitKind::Rhino:
-      return rhinoRenderer;
-    case VehicleUnitKind::Grizzly:
-      return grizzlyRenderer;
-    default:
-      return ensureCachedVehicleRenderer(cache, window, paths, voxelLighting, unitPalette, kind);
-  }
-}
-
-[[nodiscard]] std::optional<BuildFaction> factionForConstructionYardId(const std::string& buildingId) {
-  if (buildingId == "GACNST") {
-    return BuildFaction::Allied;
-  }
-  if (buildingId == "NACNST") {
-    return BuildFaction::Soviet;
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] std::optional<std::size_t> findCompleteWarFactory(const std::vector<BuildingInstance>& buildings,
-                                                                const BuildFaction faction) {
-  const auto* factoryId = warFactoryIdForFaction(faction);
-  for (std::size_t index = 0; index < buildings.size(); ++index) {
-    const auto& building = buildings[index];
-    if (building.assetId == factoryId && building.state == BuildingState::Complete) {
-      return index;
-    }
-  }
-  return std::nullopt;
-}
-
-[[nodiscard]] BuildingPlacement deploymentPlacementForUnit(const TileCoord cell, const FoundationSize foundation) {
-  // The RA2-style 4x4 footprint generated by foundationTiles() is anchored around
-  // this logical cell, so the MCV cell itself must be kept as the deployment anchor.
-  return BuildingPlacement{
-    cell,
-    foundation.width,
-    foundation.height
-  };
-}
-
-[[nodiscard]] std::uint32_t buildingBuildupDurationMs(const BuildingAsset& asset) {
-  return static_cast<std::uint32_t>(asset.buildupTextures.size()) * kBuildingBuildupFrameDurationMs;
-}
-
-[[nodiscard]] TileCoord warFactoryProductionCenter(const BuildingInstance& factory) {
-  return factory.placement.topLeft;
-}
-
-[[nodiscard]] TileCoord warFactoryDoorCell(const BuildingInstance& factory) {
-  return TileCoord{factory.placement.topLeft.x + 2, factory.placement.topLeft.y};
-}
-
-[[nodiscard]] TileCoord warFactoryExitCell(const BuildingInstance& factory) {
-  const auto door = warFactoryDoorCell(factory);
-  return TileCoord{door.x + 1, door.y};
-}
-
-[[nodiscard]] std::vector<TileCoord> warFactoryExitPath(const BuildingInstance& factory) {
-  const auto center = warFactoryProductionCenter(factory);
-  const auto door = warFactoryDoorCell(factory);
-  return std::vector<TileCoord>{
-    TileCoord{center.x + 1, center.y},
-    door,
-    warFactoryExitCell(factory)
-  };
-}
-
 [[nodiscard]] bool isLayeredWarFactoryInstance(const BuildingInstance& building) {
-  return (building.assetId == "GAWEAP" || building.assetId == "NAWEAP") &&
+  return building.layeredFactory &&
          building.state == BuildingState::Complete;
 }
 
@@ -411,92 +155,14 @@ VplBoxRenderer& vehicleRendererForKind(const VehicleUnitKind kind,
   return delta;
 }
 
-[[nodiscard]] float rotateTowardAngle(const float currentRadians,
-                                      const float targetRadians,
-                                      const float maxStepRadians) {
-  const float delta = shortestAngleDelta(currentRadians, targetRadians);
-  if (std::fabs(delta) <= maxStepRadians) {
-    return normalizeAngleRadians(targetRadians);
-  }
-  return normalizeAngleRadians(currentRadians + (delta > 0.0f ? maxStepRadians : -maxStepRadians));
-}
-
-[[nodiscard]] Vec2 screenToLogicalFloat(const float screenX,
-                                        const float screenY,
-                                        const Vec2 origin,
-                                        const float tileWidth,
-                                        const float tileHeight) {
-  const float dx = (screenX - origin.x) / (tileWidth * 0.5f);
-  const float dy = (screenY - origin.y) / (tileHeight * 0.5f);
-  return Vec2{
-    (dy + dx) * 0.5f,
-    (dy - dx) * 0.5f
-  };
-}
-
-[[nodiscard]] Vec2 logicalCenterForPlacementLocal(const BuildingPlacement& placement) {
-  const auto tiles = foundationTiles(placement);
-  if (tiles.empty()) {
-    return Vec2{static_cast<float>(placement.topLeft.x), static_cast<float>(placement.topLeft.y)};
-  }
-
-  Vec2 sum{};
-  for (const auto tile : tiles) {
-    sum.x += static_cast<float>(tile.x);
-    sum.y += static_cast<float>(tile.y);
-  }
-  const float invCount = 1.0f / static_cast<float>(tiles.size());
-  return Vec2{sum.x * invCount, sum.y * invCount};
-}
-
-bool issueGrandCannonTurnCommand(BuildingInstance& building,
-                                 const float mouseX,
-                                 const float mouseY,
-                                 const Vec2 mapOrigin,
-                                 const float tileWidth,
-                                 const float tileHeight) {
-  if (!isCompleteGrandCannon(building)) {
-    return false;
-  }
-
-  const auto center = logicalCenterForPlacementLocal(building.placement);
-  const auto target = screenToLogicalFloat(mouseX, mouseY, mapOrigin, tileWidth, tileHeight);
-  const Vec2 delta{target.x - center.x, target.y - center.y};
-  if (delta.x * delta.x + delta.y * delta.y <= 0.0001f) {
-    return false;
-  }
-
-  building.turretTargetHeadingRadians = normalizeAngleRadians(std::atan2(delta.y, delta.x));
-  return true;
-}
-
-void updateGrandCannonTurrets(std::vector<BuildingInstance>& buildings, const float deltaSeconds) {
-  const float maxStep = kGrandCannonTurnSpeedRadiansPerSecond * std::max(0.0f, deltaSeconds);
-  for (auto& building : buildings) {
-    if (!isCompleteGrandCannon(building)) {
-      continue;
-    }
-    building.turretHeadingRadians =
-      rotateTowardAngle(building.turretHeadingRadians, building.turretTargetHeadingRadians, maxStep);
-  }
-}
-
 [[nodiscard]] Vec2 grandCannonTurretAnchor(const BuildingInstance& building,
+                                           const ra2::IniDocument& rules,
                                            const Vec2 mapOrigin,
                                            const float tileWidth,
                                            const float tileHeight) {
-  constexpr float kTurretAnimX = 3.0f;
-  constexpr float kTurretAnimY = 28.0f;
-
-  const auto baseAnchor = isoToScreen(building.placement.topLeft.x,
-                                      building.placement.topLeft.y,
-                                      mapOrigin,
-                                      tileWidth,
-                                      tileHeight);
-  return Vec2{
-    baseAnchor.x + kTurretAnimX,
-    baseAnchor.y + kTurretAnimY
-  };
+  const auto center = buildingDrawCenter(building.placement, mapOrigin, tileWidth, tileHeight);
+  return {center.x + rules.integer(building.assetId, "TurretAnimX"),
+          center.y + rules.integer(building.assetId, "TurretAnimY")};
 }
 
 [[nodiscard]] VplBoxRendererState grandCannonRenderState(const HouseColorSet& houseColors,
@@ -533,15 +199,6 @@ void updateGrandCannonTurrets(std::vector<BuildingInstance>& buildings, const fl
   return std::clamp(frontMostDepth - kTurretDepthBias01, 0.001f, 0.999f);
 }
 
-[[nodiscard]] bool footprintContainsTile(const BuildingPlacement& placement, const TileCoord tile) {
-  for (const auto footprintTile : foundationTiles(placement)) {
-    if (footprintTile.x == tile.x && footprintTile.y == tile.y) {
-      return true;
-    }
-  }
-  return false;
-}
-
 [[nodiscard]] bool rhinoOccupiesMouseTile(const RhinoUnitState& tank, const TileCoord mouseTile) {
   const int minX = static_cast<int>(std::floor(tank.tilePosition.x));
   const int maxX = static_cast<int>(std::ceil(tank.tilePosition.x));
@@ -557,49 +214,10 @@ void updateGrandCannonTurrets(std::vector<BuildingInstance>& buildings, const fl
   return mouseTile.x == tank.occupiedCell.x && mouseTile.y == tank.occupiedCell.y;
 }
 
-[[nodiscard]] bool rhinoInsideWarFactoryFootprint(const RhinoUnitState& tank,
-                                                  const BuildingInstance& factory) {
-  if (!isLayeredWarFactoryInstance(factory)) {
-    return false;
-  }
-
-  const int minX = static_cast<int>(std::floor(tank.tilePosition.x));
-  const int maxX = static_cast<int>(std::ceil(tank.tilePosition.x));
-  const int minY = static_cast<int>(std::floor(tank.tilePosition.y));
-  const int maxY = static_cast<int>(std::ceil(tank.tilePosition.y));
-  for (int y = minY; y <= maxY; ++y) {
-    for (int x = minX; x <= maxX; ++x) {
-      if (footprintContainsTile(factory.placement, TileCoord{x, y})) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-[[nodiscard]] bool rhinoInsideAnyWarFactoryFootprint(const RhinoUnitState& tank,
-                                                     const std::vector<BuildingInstance>& buildings) {
-  for (const auto& building : buildings) {
-    if (rhinoInsideWarFactoryFootprint(tank, building)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void deselectRhinoTanks(std::vector<RhinoUnitState>& tanks) {
-  for (auto& tank : tanks) {
-    tank.selected = false;
-  }
-}
-
-[[nodiscard]] std::optional<std::size_t> selectedRhinoTankIndex(const std::vector<RhinoUnitState>& tanks) {
-  for (std::size_t index = 0; index < tanks.size(); ++index) {
-    if (tanks[index].selected) {
-      return index;
-    }
-  }
-  return std::nullopt;
+[[nodiscard]] bool drawnWithFactory(const RhinoUnitState& vehicle, const std::vector<BuildingInstance>& buildings) {
+  return std::any_of(buildings.begin(), buildings.end(), [&](const auto& factory) {
+    return ra2::isFactoryExitVehicle(vehicle, factory);
+  });
 }
 
 [[nodiscard]] bool isStopCommandEvent(const SDL_Event& event) {
@@ -615,17 +233,6 @@ void deselectRhinoTanks(std::vector<RhinoUnitState>& tanks) {
     keyCount > SDL_SCANCODE_RCTRL &&
     (keyboardState[SDL_SCANCODE_LCTRL] != 0 || keyboardState[SDL_SCANCODE_RCTRL] != 0);
   return (SDL_GetModState() & KMOD_CTRL) != 0 || scancodeCtrl;
-}
-
-[[nodiscard]] bool stopSelectedRhinoGroundFire(std::vector<RhinoUnitState>& tanks) {
-  bool hasSelectedRhino = false;
-  for (auto& tank : tanks) {
-    if (tank.kind == VehicleUnitKind::Rhino && tank.selected) {
-      stopRhinoGroundFire(tank);
-      hasSelectedRhino = true;
-    }
-  }
-  return hasSelectedRhino;
 }
 
 [[nodiscard]] std::optional<std::size_t> hitTestRhinoTanks(const std::vector<RhinoUnitState>& tanks,
@@ -655,15 +262,6 @@ void deselectRhinoTanks(std::vector<RhinoUnitState>& tanks) {
                            style.faction);
 }
 
-void loadMcvAssetsForFaction(VplBoxRenderer& mcvRenderer,
-                             const DemoAppPaths& paths,
-                             const BuildFaction faction,
-                             const VplFile& voxelLighting) {
-  mcvRenderer.loadVehicleAssets(mcvVoxelRootForFaction(paths, faction),
-                                voxelLighting,
-                                mcvVoxelStemForFaction(faction));
-}
-
 void applyViewportState(SDL_Window* window,
                         Renderer2D& renderer,
                         IsoGridRenderer& gridRenderer,
@@ -673,25 +271,59 @@ void applyViewportState(SDL_Window* window,
   gridRenderer.setViewport(viewport.width, viewport.height);
 }
 
-[[nodiscard]] SimulationFrame advanceSimulationClock(const ImGuiDebugPanelState& debugPanelState,
-                                                     std::uint32_t& lastRealTicks,
-                                                     double& simulationTicks) {
-  const std::uint32_t realNowTicks = SDL_GetTicks();
-  const std::uint32_t realDeltaTicks = realNowTicks - lastRealTicks;
-  lastRealTicks = realNowTicks;
-
-  const double speedMultiplier =
-    std::clamp(static_cast<double>(debugPanelState.gameplay.speedMultiplier), 0.0, 8.0);
-  const double simulatedDeltaTicks = static_cast<double>(realDeltaTicks) * speedMultiplier;
-  simulationTicks += simulatedDeltaTicks;
-  return SimulationFrame{
-    static_cast<std::uint32_t>(simulationTicks),
-    static_cast<float>(simulatedDeltaTicks / 1000.0)
-  };
+// Hidden-window regression: compare rendered source pixels, not just enum values.
+// This catches palette routing, accidental house remaps and the old 0.82 dimming.
+void verifyMineralPaletteRendering(Renderer2D& renderer, const ra2::ResourceVisualAssets& assets,
+                                   const PaletteLibrary& library, const Palette& animationPalette,
+                                   const std::filesystem::path& assetRoot, int viewportHeight) {
+  constexpr std::array<const char*,3> directories{"temperate","snow","urban"};
+  constexpr std::array<const char*,3> extensions{".tem",".sno",".urb"};
+  constexpr std::array<const char*,3> palettes{"temperat.pal","snow.pal","urban.pal"};
+  for (std::size_t theater=0;theater<directories.size();++theater) {
+    const auto& active=palettesForTheater(library,static_cast<TheaterStyle>(theater));
+    renderer.setIndexedPalettes(active.unit,active.terrain);
+    renderer.setResourcePalettes(active.resource,animationPalette);
+    renderer.setRemapColor({0,255,255,255});
+    const auto expectedResource=Palette::load(assetRoot/"palettes"/"resources"/palettes[theater]);
+    for(int kind=0;kind<3;++kind) {
+      const bool effect=kind==2;
+      const auto source=effect ? assetRoot/"effects"/"harvesting"/"oregath.shp" :
+        assetRoot/"terrain"/"resources"/directories[theater]/(std::string(kind==0?"tib01":"gem01")+extensions[theater]);
+      const auto frame=ShpTsFile::load(source).decodeFrame(effect?6:11);
+      const auto& texture=effect ? assets.gathering : assets.overlays[theater][kind];
+      const auto& palette=effect ? animationPalette : expectedResource;
+      const float u0=effect?6.f/15:11.f/12, u1=effect?7.f/15:1.f, v1=effect?1.f/8:1.f/12;
+      const float w=frame.width,h=frame.height;
+      const std::array<RenderVertex,6> quad{{{0,0,0,u0,0},{w,0,0,u1,0},{w,h,0,u1,v1},
+                                            {0,0,0,u0,0},{w,h,0,u1,v1},{0,h,0,u0,v1}}};
+      renderer.beginFrame(0,0,0,1);
+      renderer.beginUiPass();
+      renderer.draw(GL_TRIANGLES,texture,quad.data(),quad.size());
+      std::vector<std::uint8_t> pixels(frame.width*frame.height*4);
+      glReadPixels(0,viewportHeight-frame.height,frame.width,frame.height,GL_RGBA,GL_UNSIGNED_BYTE,pixels.data());
+      for(int y=0;y<frame.height;++y) for(int x=0;x<frame.width;++x) {
+        const auto index=frame.indices[y*frame.width+x];
+        const auto expected=index==0?Rgba{0,0,0,255}:palette.color(index);
+        const auto offset=((frame.height-1-y)*frame.width+x)*4;
+        if(std::abs(int(pixels[offset])-expected.r)>1 || std::abs(int(pixels[offset+1])-expected.g)>1 ||
+           std::abs(int(pixels[offset+2])-expected.b)>1)
+          throw std::runtime_error("Mineral palette pixel mismatch: "+source.string()+" index="+std::to_string(index));
+      }
+    }
+  }
+  std::cout<<"Mineral palette GPU readback passed for ore, gems and gathering in all 3 theaters\n";
 }
-}  // namespace
 
-int main(int, char**) {
+} // namespace
+
+int main(const int argc, char** argv) {
+  const bool simulationSmokeTest = argc >= 2 && std::string_view(argv[1]) == "--simulation-smoke-test";
+  const bool gameSpeedSmokeTest = argc == 2 && std::string_view(argv[1]) == "--game-speed-smoke-test";
+  const bool buildingSmokeTest = argc >= 2 && std::string_view(argv[1]) == "--building-smoke-test";
+  const bool miningSmokeTest = argc >= 2 && std::string_view(argv[1]) == "--mining-smoke-test";
+  const bool tankSmokeTest = argc >= 2 && std::string_view(argv[1]) == "--tank-smoke-test";
+  const bool selectionSmokeTest = argc >= 2 && std::string_view(argv[1]) == "--selection-smoke-test";
+  const bool smokeTest = selectionSmokeTest || tankSmokeTest || miningSmokeTest || simulationSmokeTest || gameSpeedSmokeTest || buildingSmokeTest || (argc == 2 && std::string_view(argv[1]) == "--smoke-test");
   SDL_Window* window = nullptr;
   SDL_GLContext glContext = nullptr;
   Renderer2D renderer;
@@ -705,6 +337,7 @@ int main(int, char**) {
   BuildingAssetCache buildingAssetCache;
   RhinoUnitUiAssets rhinoUiAssets;
   WeaponVisualAssets weaponVisualAssets;
+  ra2::ResourceVisualAssets resourceVisualAssets;
 
   try {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -721,7 +354,7 @@ int main(int, char**) {
                               SDL_WINDOWPOS_CENTERED,
                               initialViewport.width,
                               initialViewport.height,
-                              SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+                              SDL_WINDOW_OPENGL | (smokeTest ? SDL_WINDOW_HIDDEN : SDL_WINDOW_SHOWN));
     if (window == nullptr) {
       throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
     }
@@ -737,9 +370,9 @@ int main(int, char**) {
     initializeImGuiDebugPanel(window, glContext);
 
     const auto paths = locateDemoAppPaths(std::filesystem::current_path());
-    const auto artIni = ArtIni::load(paths.settingsRoot / "art.ini");
-    const auto houseColors = loadHouseColors(paths.settingsRoot / "rules.ini");
-    const auto objectStrengths = loadObjectStrengths(paths.settingsRoot / "rules.ini");
+    const auto definitions = ra2::DefinitionRegistry::load(paths.settingsRoot);
+    const auto artIni = ArtIni::fromDocument(definitions.art(), definitions.replica());
+    const auto houseColors = loadHouseColors(definitions.rules());
     const auto voxelLighting = VplFile::load(paths.paletteRoot / "voxel" / "voxels.vpl");
     const auto paletteLibrary = loadPaletteLibrary(paths.paletteRoot);
     const auto cameoPalette = Palette::load(paths.paletteRoot / "ui" / "cameo.pal");
@@ -753,6 +386,7 @@ int main(int, char**) {
 
     const auto& initialTheaterPalettes = palettesForTheater(paletteLibrary, debugPanelState.style.theater);
     renderer.setIndexedPalettes(initialTheaterPalettes.unit, initialTheaterPalettes.terrain);
+    renderer.setResourcePalettes(initialTheaterPalettes.resource, animationPalette);
     renderer.setRemapColor(activeHouseColorValue(debugPanelState.style, houseColors));
 
     BuildingAssetMap* activeBuildingAssets =
@@ -764,608 +398,330 @@ int main(int, char**) {
                             debugPanelState.style);
     sidebarAssets = loadSidebarAssetsForStyle(paths, debugPanelState.style, cameoPalette);
     rhinoUiAssets = loadRhinoUnitUiAssets(paths.unitOverlayRoot, overlayPalette);
-    weaponVisualAssets = loadWeaponVisualAssets(paths.effectsRoot, animationPalette);
-
-    rhinoRenderer.initialize(window);
-    rhinoRenderer.loadRhinoAssets(paths.rhinoRoot, voxelLighting);
-    rhinoRenderer.setPalette(initialTheaterPalettes.unit);
-    grizzlyRenderer.initialize(window);
-    grizzlyRenderer.loadVehicleAssets(paths.grizzlyRoot, voxelLighting, "gtnk", "gtnktur", "gtnkbarl");
-    grizzlyRenderer.setPalette(initialTheaterPalettes.unit);
-    preloadVehicleRenderers(vehicleRendererCache,
-                            window,
-                            paths,
-                            voxelLighting,
-                            initialTheaterPalettes.unit);
-    grandCannonRenderer.initialize(window);
-    grandCannonRenderer.loadTurretAssets(paths.buildingRoot / "allied" / "gtgcan",
-                                         voxelLighting,
-                                         "gtgcantur",
-                                         "gtgcanbarl");
-    grandCannonRenderer.setPalette(initialTheaterPalettes.unit);
-    mcvRenderer.initialize(window);
-    BuildFaction mcvFaction = debugPanelState.style.faction;
-    loadMcvAssetsForFaction(mcvRenderer, paths, mcvFaction, voxelLighting);
-    mcvRenderer.setPalette(initialTheaterPalettes.unit);
-
-    SidebarState sidebarState{};
-    MapGrid map(64, 64);
-    const auto maxHpForObject = [&](const std::string& objectId) {
-      const auto it = objectStrengths.find(objectId);
-      return it != objectStrengths.end() ? it->second : 1000;
-    };
-    const auto visualMaxHpForFoundation = [](const FoundationSize foundation) {
-      const int minAxis = std::min(foundation.width, foundation.height);
-      const int maxAxis = std::max(foundation.width, foundation.height);
-      if (minAxis >= 4 && maxAxis >= 4) {
-        return 3000;
-      }
-      if (minAxis >= 3 || maxAxis >= 4) {
-        return 2200;
-      }
-      if (maxAxis >= 2) {
-        return 1500;
-      }
-      return 700;
-    };
-    const auto maxHpForBuilding = [&](const BuildingAsset& asset) {
-      return std::max(maxHpForObject(asset.id), visualMaxHpForFoundation(asset.foundation));
-    };
-
-    const std::string initialBuildingId = defaultPowerPlantId(debugPanelState.style.faction);
-    const auto& initialAsset = ensureCachedAssetForStyle(buildingAssetCache,
-                                                         paths.buildingRoot,
-                                                         artIni,
-                                                         paletteLibrary,
-                                                         houseColors,
-                                                         debugPanelState.style,
-                                                         initialBuildingId);
-    const BuildingPlacement initialPlacement{
-      {18, 14},
-      initialAsset.foundation.width,
-      initialAsset.foundation.height
-    };
-    if (!map.canPlace(foundationTiles(initialPlacement))) {
-      throw std::runtime_error("Initial power plant placement is invalid");
+    weaponVisualAssets = loadWeaponVisualAssets(paths.effectsRoot, animationPalette, &definitions);
+    ra2::loadResourceVisualAssets(resourceVisualAssets, paths.projectRoot / "assets");
+    if(miningSmokeTest) {
+      verifyMineralPaletteRendering(renderer,resourceVisualAssets,paletteLibrary,animationPalette,
+                                     paths.projectRoot/"assets",viewport.height);
+      renderer.setIndexedPalettes(initialTheaterPalettes.unit,initialTheaterPalettes.terrain);
+      renderer.setResourcePalettes(initialTheaterPalettes.resource,animationPalette);
+      renderer.setRemapColor(activeHouseColorValue(debugPanelState.style,houseColors));
     }
 
-    const int initialBuildingMaxHp = maxHpForBuilding(initialAsset);
-    std::vector<BuildingInstance> buildings{
-      BuildingInstance{
-        initialBuildingId,
-        initialPlacement,
-        BuildingState::Complete,
-        0,
-        initialBuildingMaxHp,
-        initialBuildingMaxHp
+    grandCannonRenderer.initialize(window);
+    grandCannonRenderer.loadTurretAssets(paths.buildingRoot / "allied" / "gtgcan", voxelLighting, "gtgcantur", "gtgcanbarl");
+    grandCannonRenderer.setPalette(initialTheaterPalettes.unit);
+
+    ra2::World world(definitions);
+    debugPanelState.gameplay.speed = world.gameSpeed();
+    const auto initialBuildingId = defaultPowerPlantId(debugPanelState.style.faction);
+    if (!world.spawn(initialBuildingId, {18,14}) || !world.spawn("HTNK", {7,10}) ||
+        !world.spawn(mcvUnitIdForFaction(debugPanelState.style.faction), {10,14}) || !world.spawn("MTNK", {12,10}, 1))
+      throw std::runtime_error("Initial scenario cannot be created");
+    const auto selectionSmokeUnit=selectionSmokeTest?world.spawn("MTNK",{8,10}):0;
+    if(selectionSmokeTest && !selectionSmokeUnit) throw std::runtime_error("Selection smoke unit placement failed");
+    if (!smokeTest || miningSmokeTest) {
+      if (!world.spawn("GAREFN",{5,4}) || !world.spawn("NAREFN",{14,6}))
+        throw std::runtime_error("Mining scenario placement failed");
+      // Dense centers and sparse, irregular edges make depletion readable.
+      for(int x=2;x<=7;++x) for(int y=11;y<=15;++y) {
+        const int dx=2*x-9, dy=2*y-26;
+        const int edge=dx*dx+2*dy*dy;
+        if(edge<=30) world.setResource({x,y},"Riparius",std::clamp(38-edge,6,32));
       }
-    };
-    map.setOccupied(foundationTiles(initialPlacement), true);
-
-    std::vector<RhinoUnitState> rhinoTanks(1);
-    initializeRhinoUnit(rhinoTanks.front(), map, TileCoord{7, 10});
-    std::vector<ProjectileInstance> projectiles;
-    std::vector<CombatEffectInstance> combatEffects;
-    RhinoUnitState mcvUnit;
-    bool mcvActive = true;
-    McvTransitionState mcvTransition;
-    WarFactoryProductionState tankProduction;
-    initializeRhinoUnit(mcvUnit, map, TileCoord{10, 10});
-    mcvUnit.maxHp = maxHpForObject(mcvUnitIdForFaction(mcvFaction));
-    mcvUnit.hp = mcvUnit.maxHp;
+      for(int x=12;x<=16;++x) for(int y=12;y<=15;++y) {
+        const int dx=2*x-28, dy=2*y-27;
+        const int edge=dx*dx+2*dy*dy;
+        if(edge<=22) world.setResource({x,y},"Cruentus",std::clamp(28-edge,4,24));
+      }
+    }
+    const auto& map = world.map();
+    const BuildingPlacement initialPlacement{{18,14}, definitions.unit(initialBuildingId).foundationWidth, definitions.unit(initialBuildingId).foundationHeight};
+    SidebarState sidebarState{};
     const BuildingAsset* selectedBuildAsset = nullptr;
-    std::optional<std::size_t> selectedBuildingIndex;
     BuildingPlacement previewPlacement = initialPlacement;
+    ra2::UnitSelection selection;
+    ra2::SelectionGesture selectionGesture;
+    std::uint64_t sequence = 0;
     std::vector<BuildingRenderCommand> renderQueue;
-
-    std::uint32_t lastRealTicks = SDL_GetTicks();
-    double simulationTicks = static_cast<double>(lastRealTicks);
-
+    auto presentation = ra2::makeWorldView(world, definitions, selection.ids());
+    auto lastCounter = SDL_GetPerformanceCounter();
+    double fractionalMicroseconds = 0;
+    std::uint64_t nextUnlimitedRenderCounter = 0;
+    bool swapIntervalEnabled = true;
+    double metricsMicroseconds = 0, measuredGameFps = 0;
+    ra2::Tick metricsStartFrame = 0;
+    std::string interactionMessage;
+    auto send = [&](ra2::CommandKind kind, ra2::EntityId entity = 0, TileCoord cell = {}, std::string type = {}, ra2::EntityId target = 0) {
+      if (!world.enqueue({world.tick() + 1, 0, ++sequence, kind, entity, target, cell, std::move(type)})) interactionMessage = "Command rejected";
+    };
+    auto sendSelection = [&](ra2::CommandKind kind, TileCoord cell = {}, ra2::EntityId target = 0) {
+      return ra2::issueSelectionCommand(world,definitions,selection,kind,cell,target,sequence);
+    };
+    ra2::EntityId testMcv = 0;
+    ra2::EntityId testSovietMcv = 0;
+    if (tankSmokeTest) {
+      selection.selectOne(2);
+      send(ra2::CommandKind::Move,2,{11,12});
+      world.enqueue({1,1,1,ra2::CommandKind::Move,4,0,{12,13}});
+    }
+    if (buildingSmokeTest) {
+      testMcv = 3;
+      testSovietMcv = world.spawn("SMCV", {5,5});
+      if (!testSovietMcv) throw std::runtime_error("Building smoke scenario placement failed");
+      selection.selectOne(1);
+      send(ra2::CommandKind::Deploy,testMcv);
+      send(ra2::CommandKind::Deploy,testSovietMcv);
+      world.enqueue({101,0,++sequence,ra2::CommandKind::Deploy,testMcv});
+      world.enqueue({101,0,++sequence,ra2::CommandKind::Deploy,testSovietMcv});
+    }
+    if (simulationSmokeTest) {
+      const auto alliedFactory = world.spawn("GAWEAP", {10,4});
+      const auto sovietFactory = world.spawn("NAWEAP", {1,4});
+      testMcv = world.spawn("AMCV", {5,0});
+      if (!alliedFactory || !sovietFactory || !testMcv) throw std::runtime_error("Smoke scenario placement failed");
+      send(ra2::CommandKind::Deploy, testMcv);
+      send(ra2::CommandKind::Produce, alliedFactory, {}, "AMCV");
+      send(ra2::CommandKind::Produce, sovietFactory, {}, "HTNK");
+      send(ra2::CommandKind::AttackEntity, 2, {12,10}, {}, 4);
+      send(ra2::CommandKind::PlaceBuilding, 0, {0,10}, "GAPILE");
+    }
+    constexpr std::array<ra2::GameSpeed,6> smokeSpeeds{{
+      {ra2::GameSpeedMode::Multiplayer,0}, {ra2::GameSpeedMode::Multiplayer,5},
+      {ra2::GameSpeedMode::Singleplayer,5}, {ra2::GameSpeedMode::Singleplayer,6},
+      {ra2::GameSpeedMode::Singleplayer,6}, {ra2::GameSpeedMode::Multiplayer,6}}};
+    ra2::Tick speedSmokePreviousFrame = 0;
+    if (gameSpeedSmokeTest) {
+      debugPanelState.gameplay.speed = smokeSpeeds.front();
+      world.setGameSpeed(smokeSpeeds.front());
+    }
     bool running = true;
+    int smokeTestFrames = 0;
+    bool sawInternalExit = false, sawCombatDamage = false;
+    bool sawMiningCargo = false, sawMiningReturn = false;
+    bool sawMovingTurret = false, sawShell = false, sawExplosion = false;
+    std::array<bool,2> sawBuildup{}, sawComplete{}, sawPacking{};
     while (running) {
-      const auto simulationFrame = advanceSimulationClock(debugPanelState, lastRealTicks, simulationTicks);
-      const std::uint32_t nowTicks = simulationFrame.nowTicks;
+      const auto counter = SDL_GetPerformanceCounter();
+      const double elapsed = static_cast<double>(counter - lastCounter) * 1000000.0 / SDL_GetPerformanceFrequency();
+      lastCounter = counter;
+      fractionalMicroseconds += elapsed;
+      const auto wholeMicroseconds = static_cast<std::uint64_t>(fractionalMicroseconds);
+      fractionalMicroseconds -= static_cast<double>(wholeMicroseconds);
+      const bool unlimited = !ra2::targetGameFrameRate(world.gameSpeed()) && !simulationSmokeTest && !miningSmokeTest && !tankSmokeTest && !buildingSmokeTest && !selectionSmokeTest;
+      if (unlimited == swapIntervalEnabled) {
+        SDL_GL_SetSwapInterval(unlimited ? 0 : 1);
+        swapIntervalEnabled = !unlimited;
+        nextUnlimitedRenderCounter = counter;
+      }
+      if (buildingSmokeTest || tankSmokeTest || selectionSmokeTest) world.step();
+      else if (simulationSmokeTest || miningSmokeTest) world.advance(1000000);
+      else world.advance(gameSpeedSmokeTest ? 100000 : wholeMicroseconds, unlimited ? 8 : 120);
+      metricsMicroseconds += (simulationSmokeTest || miningSmokeTest) ? 1000000 : elapsed;
+      if (metricsMicroseconds >= 500000) {
+        measuredGameFps = (world.tick() - metricsStartFrame) * 1000000.0 / metricsMicroseconds;
+        metricsStartFrame = world.tick(); metricsMicroseconds = 0;
+      }
+      // In unlimited mode, spend available CPU time on small simulation batches.
+      // Only rendering/input uses a 60 Hz deadline; there is no logic FPS cap.
+      if (unlimited && counter < nextUnlimitedRenderCounter) continue;
+      if (unlimited) nextUnlimitedRenderCounter = counter + SDL_GetPerformanceFrequency() / 60;
+      const auto nowTicks = ra2::gameMilliseconds(world.tick());
+      if (buildingSmokeTest && world.tick()==2) selection.selectOne(testMcv);
+      selection.prune(world.snapshot());
       Vec2 mapOrigin = mapOriginForViewport(viewport);
-      const WeaponRuntimeParams weaponParams = weaponParamsFromDebugState(debugPanelState.weapon);
-
+      presentation = ra2::makeWorldView(world, definitions, selection.ids());
+      const auto& buildings = presentation.buildings;
+      const auto& rhinoTanks = presentation.vehicles;
+      const auto& projectiles = presentation.projectiles;
+      const auto& combatEffects = presentation.effects;
+      if (tankSmokeTest) {
+        for (const auto& entity:world.snapshot())
+          sawMovingTurret=sawMovingTurret || (entity.position!=entity.previous && entity.turretHeading!=entity.heading);
+        sawShell=sawShell || !projectiles.empty();
+        for (const auto& effect:combatEffects) sawExplosion=sawExplosion || effect.kind==CombatEffectKind::Explosion;
+      }
+      if (miningSmokeTest) for(const auto& entity:world.snapshot()) if(entity.harvesting) {
+        if (!selection.primary()) selection.selectOne(entity.id);
+        sawMiningCargo=sawMiningCargo || entity.harvesting->cargo>0;
+        sawMiningReturn=sawMiningReturn || entity.harvesting->phase==ra2::HarvestPhase::Unloading;
+      }
+      if (simulationSmokeTest) for (const auto& entity : world.snapshot())
+        if (entity.id == 4 && entity.hp < entity.maxHp) sawCombatDamage = true;
+      if (simulationSmokeTest) for (const auto& vehicle : rhinoTanks) {
+        if (!vehicle.exitFactoryId) continue;
+        const auto parent = std::find_if(buildings.begin(), buildings.end(), [&](const auto& b) { return b.entityId == vehicle.exitFactoryId; });
+        if (parent == buildings.end() || !ra2::isFactoryExitVehicle(vehicle, *parent))
+          throw std::runtime_error("Factory presentation link lost");
+        if (world.structureAt(vehicle.occupiedCell) == vehicle.exitFactoryId) sawInternalExit = true;
+      }
+      for (const auto& building : buildings) {
+        (void)ensureCachedAssetForStyle(buildingAssetCache, paths.buildingRoot, artIni, paletteLibrary, houseColors, debugPanelState.style, building.assetId);
+        if (buildingSmokeTest && (building.entityId==testMcv || building.entityId==testSovietMcv)) {
+          const auto index = building.entityId==testMcv ? 0 : 1;
+          if (activeBuildingAssets->at(building.assetId).buildupTextures.empty()) throw std::runtime_error("Missing construction yard buildup SHP");
+          sawBuildup[index] = sawBuildup[index] || building.state==BuildingState::Constructing;
+          sawComplete[index] = sawComplete[index] || building.state==BuildingState::Complete;
+          sawPacking[index] = sawPacking[index] || building.state==BuildingState::Packing;
+        }
+      }
       updateSidebarStateForDemo(sidebarState, sidebarAssets, viewport.height, nowTicks);
-      updateConstructionStates(buildings, *activeBuildingAssets, nowTicks);
-      updateGrandCannonTurrets(buildings, simulationFrame.deltaSeconds);
-
+      const auto clampWorldPoint=[&](float x,float y) {
+        return Vec2{std::clamp(x,0.0f,float(viewport.width)-DemoAppConfig::kSidebarWidth-1),
+                    std::clamp(y,0.0f,float(viewport.height)-1)};
+      };
+      if(selectionSmokeTest) {
+        const auto origin=mapOriginForViewport(viewport);
+        const Vec2 first{origin.x+(7-10)*30,origin.y+(7+10)*15};
+        const Vec2 second{origin.x+(8-10)*30,origin.y+(8+10)*15};
+        const Vec2 start{first.x-30,first.y-35},end{second.x+30,second.y+25};
+        const Vec2 goal{origin.x+(10-8)*30,origin.y+(10+8)*15};
+        const auto mouseEvent=[&](Uint32 type,Vec2 point) {
+          SDL_Event input{}; input.type=type;
+          if(type==SDL_MOUSEMOTION) { input.motion.x=int(point.x); input.motion.y=int(point.y); input.motion.state=SDL_BUTTON_LMASK; }
+          else { input.button.button=SDL_BUTTON_LEFT; input.button.state=type==SDL_MOUSEBUTTONDOWN?SDL_PRESSED:SDL_RELEASED;
+                 input.button.x=int(point.x); input.button.y=int(point.y); }
+          if(SDL_PushEvent(&input)<0) throw std::runtime_error(SDL_GetError());
+        };
+        if(world.tick()==1) mouseEvent(SDL_MOUSEBUTTONDOWN,start);
+        if(world.tick()==2) mouseEvent(SDL_MOUSEMOTION,end);
+        if(world.tick()==3) mouseEvent(SDL_MOUSEBUTTONUP,end);
+        if(world.tick()==4) mouseEvent(SDL_MOUSEBUTTONDOWN,goal);
+        if(world.tick()==5) mouseEvent(SDL_MOUSEBUTTONUP,goal);
+      }
       SDL_Event event{};
       while (SDL_PollEvent(&event)) {
         processImGuiDebugPanelEvent(event);
-
-        if (event.type == SDL_QUIT) {
-          running = false;
+        if (event.type == SDL_QUIT) { running = false; continue; }
+        if (event.type==SDL_WINDOWEVENT && event.window.event==SDL_WINDOWEVENT_FOCUS_LOST) {
+          selectionGesture.cancel(); SDL_CaptureMouse(SDL_FALSE); continue;
+        }
+        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) { running = false; continue; }
+        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_d && (event.key.keysym.mod & KMOD_CTRL)) { debugPanelState.visible = !debugPanelState.visible; continue; }
+        if (event.type == SDL_KEYDOWN && imguiDebugPanelWantsKeyboard()) continue;
+        if (isStopCommandEvent(event)) { sendSelection(ra2::CommandKind::Stop); continue; }
+        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_h) {
+          for(const auto& entity:world.snapshot()) if(selection.contains(entity.id) && entity.owner==0 && entity.harvesting)
+            send(ra2::CommandKind::Harvest,entity.id,entity.cell);
           continue;
         }
-
-        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-          running = false;
-          continue;
-        }
-
-        if (event.type == SDL_KEYDOWN &&
-            event.key.keysym.sym == SDLK_d &&
-            (event.key.keysym.mod & KMOD_CTRL) != 0) {
-          debugPanelState.visible = !debugPanelState.visible;
-          continue;
-        }
-
-        if (isStopCommandEvent(event) && stopSelectedRhinoGroundFire(rhinoTanks)) {
-          continue;
-        }
-
-        if (event.type == SDL_KEYDOWN &&
-            debugPanelState.visible &&
-            imguiDebugPanelWantsKeyboard()) {
-          continue;
-        }
-
-        if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-          const float mouseX = static_cast<float>(event.button.x);
-          const float mouseY = static_cast<float>(event.button.y);
-
-          if (imguiDebugPanelContainsPoint(debugPanelState, mouseX, mouseY) ||
-              (debugPanelState.visible && imguiDebugPanelWantsMouse())) {
-            continue;
-          }
-
-          const auto sidebarClick = handleSidebarLeftClick(sidebarState,
-                                                           sidebarAssets,
-                                                           static_cast<float>(viewport.width),
-                                                           static_cast<float>(viewport.height),
-                                                           mouseX,
-                                                           mouseY);
-          if (sidebarClick.consumed) {
-            applySidebarClick(sidebarState, sidebarAssets, sidebarClick);
-            if (sidebarClick.action == SidebarClickAction::ClickIcon) {
-              const auto buildingId = buildingIdForIcon(sidebarClick.iconId, debugPanelState.style.faction);
-              if (buildingId.has_value()) {
-                selectedBuildAsset = &ensureCachedAssetForStyle(buildingAssetCache,
-                                                                paths.buildingRoot,
-                                                                artIni,
-                                                                paletteLibrary,
-                                                                houseColors,
-                                                                debugPanelState.style,
-                                                                *buildingId);
-                previewPlacement = placementFromAnchor(previewPlacement.topLeft,
-                                                       selectedBuildAsset->foundation);
-                selectedBuildingIndex.reset();
-                deselectRhinoTanks(rhinoTanks);
-                if (mcvActive) {
-                  mcvUnit.selected = false;
-                }
-              } else if (const auto* vehicleSpec =
-                           vehicleSpecForProductionIcon(sidebarClick.iconId, debugPanelState.style.faction);
-                         vehicleSpec != nullptr &&
-                         !tankProduction.active &&
-                         mcvTransition.phase == McvTransitionPhase::None) {
-                const auto factoryIndex = findCompleteWarFactory(buildings, debugPanelState.style.faction);
-                if (factoryIndex.has_value()) {
-                  const auto& factory = buildings[*factoryIndex];
-                  const TileCoord productionCenter = warFactoryProductionCenter(factory);
-                  const auto exitPath = warFactoryExitPath(factory);
-                  const TileCoord exitCell = exitPath.empty() ? productionCenter : exitPath.back();
-                  if (map.isBuildable(exitCell)) {
-                    map.setOccupied(foundationTiles(factory.placement), true);
-
-                    deselectRhinoTanks(rhinoTanks);
-                    const VehicleUnitKind producedKind = vehicleSpec->kind;
-                    RhinoUnitState producedTank;
-                    producedTank.kind = producedKind;
-                    producedTank.tilePosition =
-                      Vec2{static_cast<float>(productionCenter.x), static_cast<float>(productionCenter.y)};
-                    producedTank.occupiedCell = productionCenter;
-                    producedTank.selected = true;
-                    producedTank.maxHp = maxHpForObject(std::string(vehicleSpec->objectId));
-                    producedTank.hp = producedTank.maxHp;
-                    producedTank.path = exitPath;
-                    producedTank.moveTarget = exitCell;
-                    producedTank.steeringTarget = productionCenter;
-                    producedTank.steeringDirectionIndex = 0;
-                    producedTank.hasPendingMove = false;
-                    producedTank.finishPathBeforePendingMove = true;
-                    producedTank.pendingMoveTarget = exitCell;
-                    producedTank.waypointVisibleUntilTicks = 0;
-                    setRhinoDirectionIndex(producedTank, kWarFactoryExitDirectionIndex);
-                    rhinoTanks.push_back(producedTank);
-
-                    tankProduction.active = true;
-                    tankProduction.factoryPlacement = factory.placement;
-                    tankProduction.exitCell = exitCell;
-                    tankProduction.tankIndex = rhinoTanks.size() - 1;
-                    selectedBuildAsset = nullptr;
-                    selectedBuildingIndex.reset();
-                    if (mcvActive) {
-                      mcvUnit.selected = false;
-                    }
-                  }
-                }
-              }
-            }
-            continue;
-          }
-
-          if (selectedBuildAsset != nullptr) {
-            const int selectedBuildMaxHp = maxHpForBuilding(*selectedBuildAsset);
-            tryPlaceSelectedBuilding(mouseX,
-                                     mouseY,
-                                     nowTicks,
-                                     static_cast<float>(viewport.width),
-                                     DemoAppConfig::kSidebarWidth,
-                                     mapOrigin,
-                                     DemoAppConfig::kTileWidth,
-                                     DemoAppConfig::kTileHeight,
-                                     map,
-                                     buildings,
-                                     selectedBuildAsset,
-                                     selectedBuildMaxHp,
-                                     previewPlacement);
-            continue;
-          }
-
-          if (mcvTransition.phase != McvTransitionPhase::None) {
-            continue;
-          }
-
-          if (isCtrlModifierDown()) {
-            if (const auto selectedTankIndex = selectedRhinoTankIndex(rhinoTanks); selectedTankIndex.has_value()) {
-              auto& selectedTank = rhinoTanks[*selectedTankIndex];
-              if (issueRhinoGroundFireCommand(selectedTank,
-                                              map,
-                                              screenToLogicalFloat(mouseX,
-                                                                   mouseY,
-                                                                   mapOrigin,
-                                                                   DemoAppConfig::kTileWidth,
-                                                                   DemoAppConfig::kTileHeight),
-                                              nowTicks,
-                                              weaponParams)) {
-                continue;
-              }
-            }
-          }
-
-          if (mcvActive) {
-            const auto mouseTile = screenToIso(mouseX,
-                                               mouseY,
-                                               mapOrigin,
-                                               DemoAppConfig::kTileWidth,
-                                               DemoAppConfig::kTileHeight);
-            const bool hitMcv = rhinoOccupiesMouseTile(mcvUnit, mouseTile);
-            if (hitMcv) {
-              if (mcvUnit.selected && mcvUnit.path.empty()) {
-                const auto constructionYardId = std::string(constructionYardIdForFaction(mcvFaction));
-                const auto& constructionYardAsset = ensureCachedAssetForStyle(buildingAssetCache,
-                                                                              paths.buildingRoot,
-                                                                              artIni,
-                                                                              paletteLibrary,
-                                                                              houseColors,
-                                                                              debugPanelState.style,
-                                                                              constructionYardId);
-                const auto placement = deploymentPlacementForUnit(mcvUnit.occupiedCell,
-                                                                  constructionYardAsset.foundation);
-                map.setOccupied(std::vector<TileCoord>{mcvUnit.occupiedCell}, false);
-                if (map.canPlace(foundationTiles(placement))) {
-                  mcvTransition.phase = McvTransitionPhase::TurningToDeploy;
-                  mcvTransition.faction = mcvFaction;
-                  mcvTransition.placement = placement;
-                  mcvTransition.hpRatio = mcvUnit.maxHp > 0
-                                            ? static_cast<float>(mcvUnit.hp) / static_cast<float>(mcvUnit.maxHp)
-                                            : 1.0f;
-                  mcvUnit.path.clear();
-                  mcvUnit.hasPendingMove = false;
-                  mcvUnit.selected = true;
-                  selectedBuildingIndex.reset();
-                  deselectRhinoTanks(rhinoTanks);
-                }
-                map.setOccupied(std::vector<TileCoord>{mcvUnit.occupiedCell}, true);
-              } else {
-                mcvUnit.selected = true;
-                deselectRhinoTanks(rhinoTanks);
-                selectedBuildingIndex.reset();
-              }
-              continue;
-            }
-          }
-
-          const auto hitRhino = hitTestRhinoTanks(rhinoTanks,
-                                                  mouseX,
-                                                  mouseY,
-                                                  mapOrigin,
-                                                  DemoAppConfig::kTileWidth,
-                                                  DemoAppConfig::kTileHeight);
-          if (hitRhino.has_value()) {
-            deselectRhinoTanks(rhinoTanks);
-            rhinoTanks[*hitRhino].selected = true;
-            if (mcvActive) {
-              mcvUnit.selected = false;
-            }
-            selectedBuildingIndex.reset();
-            continue;
-          }
-
-          const auto hitBuilding = hitTestBuildingAtPoint(*activeBuildingAssets,
-                                                          buildings,
-                                                          mouseX,
-                                                          mouseY,
-                                                          mapOrigin,
-                                                          DemoAppConfig::kTileWidth,
-                                                          DemoAppConfig::kTileHeight);
-          if (hitBuilding.has_value()) {
-            selectedBuildingIndex = hitBuilding;
-            deselectRhinoTanks(rhinoTanks);
-            if (mcvActive) {
-              mcvUnit.selected = false;
-            }
-            continue;
-          }
-
-          if (selectedBuildingIndex.has_value() && *selectedBuildingIndex < buildings.size()) {
-            auto& selectedBuilding = buildings[*selectedBuildingIndex];
-            if (isCompleteGrandCannon(selectedBuilding)) {
-              const auto targetCell = screenToIso(mouseX,
-                                                  mouseY,
-                                                  mapOrigin,
-                                                  DemoAppConfig::kTileWidth,
-                                                  DemoAppConfig::kTileHeight);
-              if (map.isBuildable(targetCell)) {
-                issueGrandCannonTurnCommand(selectedBuilding,
-                                            mouseX,
-                                            mouseY,
-                                            mapOrigin,
-                                            DemoAppConfig::kTileWidth,
-                                            DemoAppConfig::kTileHeight);
-              }
-              continue;
-            }
-          }
-
-          if (selectedBuildingIndex.has_value() && !mcvActive) {
-            auto& selectedBuilding = buildings[*selectedBuildingIndex];
-            const auto yardFaction = factionForConstructionYardId(selectedBuilding.assetId);
-            if (yardFaction.has_value() && selectedBuilding.state == BuildingState::Complete) {
-              const auto targetCell = screenToIso(mouseX,
-                                                  mouseY,
-                                                  mapOrigin,
-                                                  DemoAppConfig::kTileWidth,
-                                                  DemoAppConfig::kTileHeight);
-              const float hpRatio = selectedBuilding.maxHp > 0
-                                      ? static_cast<float>(selectedBuilding.hp) /
-                                          static_cast<float>(selectedBuilding.maxHp)
-                                      : 1.0f;
-              selectedBuilding.state = BuildingState::Packing;
-              selectedBuilding.stateStartTicks = nowTicks;
-              mcvTransition.phase = McvTransitionPhase::PackingToVehicle;
-              mcvTransition.faction = *yardFaction;
-              mcvTransition.placement = selectedBuilding.placement;
-              mcvTransition.pendingMoveTarget = targetCell;
-              mcvTransition.buildingIndex = *selectedBuildingIndex;
-              mcvTransition.hpRatio = hpRatio;
-              deselectRhinoTanks(rhinoTanks);
-              continue;
-            }
-          }
-
-          if (const auto selectedTankIndex = selectedRhinoTankIndex(rhinoTanks); selectedTankIndex.has_value()) {
-            const auto targetCell = screenToIso(mouseX,
-                                                mouseY,
-                                                mapOrigin,
-                                                DemoAppConfig::kTileWidth,
-                                                DemoAppConfig::kTileHeight);
-            auto& selectedTank = rhinoTanks[*selectedTankIndex];
-            if (map.isBuildable(targetCell) ||
-                (targetCell.x == selectedTank.occupiedCell.x && targetCell.y == selectedTank.occupiedCell.y)) {
-              issueRhinoMoveCommand(selectedTank, map, targetCell, nowTicks);
-            }
-            continue;
-          }
-
-          if (mcvActive && mcvUnit.selected) {
-            const auto targetCell = screenToIso(mouseX,
-                                                mouseY,
-                                                mapOrigin,
-                                                DemoAppConfig::kTileWidth,
-                                                DemoAppConfig::kTileHeight);
-            if (map.isBuildable(targetCell) ||
-                (targetCell.x == mcvUnit.occupiedCell.x && targetCell.y == mcvUnit.occupiedCell.y)) {
-              issueRhinoMoveCommand(mcvUnit, map, targetCell, nowTicks);
-            }
-            continue;
-          }
-
-          deselectRhinoTanks(rhinoTanks);
-          if (mcvActive) {
-            mcvUnit.selected = false;
-          }
-        }
-
-        if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_RIGHT) {
-          if (imguiDebugPanelContainsPoint(debugPanelState,
-                                           static_cast<float>(event.button.x),
-                                           static_cast<float>(event.button.y)) ||
-              (debugPanelState.visible && imguiDebugPanelWantsMouse())) {
-            continue;
-          }
-
-          if (selectedBuildAsset != nullptr) {
-            selectedBuildAsset = nullptr;
-            selectedBuildingIndex.reset();
-            continue;
-          }
-
-          selectedBuildingIndex.reset();
-          deselectRhinoTanks(rhinoTanks);
-          if (mcvActive) {
-            mcvUnit.selected = false;
-          }
-        }
-
+        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_d) { sendSelection(ra2::CommandKind::Deploy); continue; }
         if (event.type == SDL_MOUSEMOTION) {
-          if (debugPanelState.visible &&
-              imguiDebugPanelContainsPoint(debugPanelState,
-                                           static_cast<float>(event.motion.x),
-                                           static_cast<float>(event.motion.y))) {
+          selectionGesture.update(clampWorldPoint(float(event.motion.x),float(event.motion.y)));
+          if (selectedBuildAsset) updatePreviewPlacementFromMouse(static_cast<float>(event.motion.x), static_cast<float>(event.motion.y),
+              static_cast<float>(viewport.width), DemoAppConfig::kSidebarWidth,
+              mapOrigin, DemoAppConfig::kTileWidth, DemoAppConfig::kTileHeight, selectedBuildAsset, previewPlacement);
+          continue;
+        }
+        if (event.type!=SDL_MOUSEBUTTONDOWN && event.type!=SDL_MOUSEBUTTONUP) continue;
+        const auto mouseX = static_cast<float>(event.button.x), mouseY = static_cast<float>(event.button.y);
+        if (event.type==SDL_MOUSEBUTTONDOWN && event.button.button==SDL_BUTTON_RIGHT) {
+          selectionGesture.cancel(); SDL_CaptureMouse(SDL_FALSE);
+          if (!imguiDebugPanelContainsPoint(debugPanelState,mouseX,mouseY) && !imguiDebugPanelWantsMouse()) {
+            selectedBuildAsset=nullptr; selection.clear();
+          }
+          continue;
+        }
+        if (event.button.button != SDL_BUTTON_LEFT) continue;
+        std::optional<ra2::SelectionRelease> release;
+        if (event.type==SDL_MOUSEBUTTONUP) {
+          release=selectionGesture.release(clampWorldPoint(mouseX,mouseY));
+          SDL_CaptureMouse(SDL_FALSE);
+          if (!release) continue;
+          if (release->dragged) {
+            selection.selectBox(release->rectangle,rhinoTanks,mapOrigin,DemoAppConfig::kTileWidth,
+                                DemoAppConfig::kTileHeight,release->additive);
             continue;
           }
-
-          updatePreviewPlacementFromMouse(static_cast<float>(event.motion.x),
-                                          static_cast<float>(event.motion.y),
-                                          static_cast<float>(viewport.width),
-                                          DemoAppConfig::kSidebarWidth,
-                                          mapOrigin,
-                                          DemoAppConfig::kTileWidth,
-                                          DemoAppConfig::kTileHeight,
-                                          selectedBuildAsset,
-                                          previewPlacement);
         }
-
-        if (event.type == SDL_KEYDOWN) {
-          TileCoord delta{};
-          switch (event.key.keysym.sym) {
-            case SDLK_LEFT: delta = TileCoord{-1, 0}; break;
-            case SDLK_RIGHT: delta = TileCoord{1, 0}; break;
-            case SDLK_UP: delta = TileCoord{0, -1}; break;
-            case SDLK_DOWN: delta = TileCoord{0, 1}; break;
-            case SDLK_b:
-              selectedBuildAsset = &ensureCachedAssetForStyle(buildingAssetCache,
-                                                              paths.buildingRoot,
-                                                              artIni,
-                                                              paletteLibrary,
-                                                              houseColors,
-                                                              debugPanelState.style,
-                                                              defaultPowerPlantId(debugPanelState.style.faction));
-              previewPlacement = placementFromAnchor(previewPlacement.topLeft,
-                                                     selectedBuildAsset->foundation);
-              selectedBuildingIndex.reset();
-              deselectRhinoTanks(rhinoTanks);
-              if (mcvActive) {
-                mcvUnit.selected = false;
+        if (imguiDebugPanelContainsPoint(debugPanelState, mouseX, mouseY) || imguiDebugPanelWantsMouse()) continue;
+        if (event.type==SDL_MOUSEBUTTONDOWN) {
+          const auto click = handleSidebarLeftClick(sidebarState, sidebarAssets, static_cast<float>(viewport.width), static_cast<float>(viewport.height), mouseX, mouseY);
+          if (click.consumed) {
+            applySidebarClick(sidebarState, sidebarAssets, click);
+            if (click.action != SidebarClickAction::ClickIcon) continue;
+            if (const auto buildingId = buildingIdForIcon(click.iconId, debugPanelState.style.faction)) {
+              selectedBuildAsset = &ensureCachedAssetForStyle(buildingAssetCache, paths.buildingRoot, artIni, paletteLibrary, houseColors, debugPanelState.style, *buildingId);
+              previewPlacement = placementFromAnchor(previewPlacement.topLeft, selectedBuildAsset->foundation);
+              selection.clear();
+            } else {
+              const auto faction = debugPanelState.style.faction == BuildFaction::Allied ? "ALLIED" : "SOVIET";
+              const ra2::UnitTypeDef* requested = nullptr;
+              for (const auto& [id, type] : definitions.units()) {
+                (void)id;
+                if (ra2::canonicalId(type.visual.cameo) == ra2::canonicalId(click.iconId) && ra2::canonicalId(type.visual.faction) == faction) { requested = &type; break; }
               }
-              break;
-            case SDLK_c:
-              selectedBuildAsset = nullptr;
-              selectedBuildingIndex.reset();
-              break;
-            default:
-              break;
-          }
-
-          moveFirstBuilding(buildings, map, delta);
-        }
-      }
-
-      for (auto& tank : rhinoTanks) {
-        updateRhinoUnit(tank, map, simulationFrame.deltaSeconds);
-        updateRhinoWeapon(tank, projectiles, combatEffects, simulationFrame.deltaSeconds, nowTicks, weaponParams);
-      }
-      updateWeaponProjectilesAndEffects(projectiles, combatEffects, simulationFrame.deltaSeconds);
-      if (tankProduction.active) {
-        map.setOccupied(foundationTiles(tankProduction.factoryPlacement), true);
-        // The produced tank can receive a queued move while exiting. Free the
-        // factory once it has reached the reserved exit cell, not only when its
-        // full path becomes empty.
-        if (tankProduction.tankIndex >= rhinoTanks.size()) {
-          tankProduction.active = false;
-        } else {
-          auto& producedTank = rhinoTanks[tankProduction.tankIndex];
-          const bool reachedExit =
-            producedTank.occupiedCell.x == tankProduction.exitCell.x &&
-            producedTank.occupiedCell.y == tankProduction.exitCell.y;
-          if (reachedExit || producedTank.path.empty()) {
-            if (reachedExit) {
-              producedTank.tilePosition = Vec2{static_cast<float>(tankProduction.exitCell.x),
-                                               static_cast<float>(tankProduction.exitCell.y)};
-              producedTank.occupiedCell = tankProduction.exitCell;
-              map.setOccupied(std::vector<TileCoord>{tankProduction.exitCell}, true);
+              if (!requested) continue;
+              if (!requested->unsupported.empty()) { interactionMessage = requested->id + ": unsupported " + requested->unsupported.front(); continue; }
+              ra2::EntityId factory = 0;
+              for (const auto& entity : world.snapshot()) {
+                const auto& type = definitions.unit(entity.type);
+                if (entity.owner == 0 && type.factory == "UNITTYPE" && type.naval == requested->naval &&
+                    entity.activity == ra2::Activity::Idle && std::any_of(requested->owners.begin(), requested->owners.end(),
+                      [&](const auto& owner) { return std::find(type.owners.begin(), type.owners.end(), owner) != type.owners.end(); })) {
+                  if (!factory || entity.id == selection.primary()) factory = entity.id;
+                }
+              }
+              if (factory) { send(ra2::CommandKind::Produce, factory, {}, requested->id); selection.selectOne(factory); selectedBuildAsset = nullptr; interactionMessage.clear(); }
+              else interactionMessage = "Place a compatible war factory first";
             }
-            tankProduction.active = false;
+            continue;
           }
-        }
-      }
-      if (mcvActive) {
-        updateRhinoUnit(mcvUnit, map, simulationFrame.deltaSeconds);
-      }
-      if (mcvTransition.phase == McvTransitionPhase::TurningToDeploy && mcvActive) {
-        if (rotateRhinoTowardDirectionIndex(mcvUnit, kMcvDeployDirectionIndex, simulationFrame.deltaSeconds)) {
-          const auto constructionYardId = std::string(constructionYardIdForFaction(mcvTransition.faction));
-          const auto& constructionYardAsset = ensureCachedAssetForStyle(buildingAssetCache,
-                                                                        paths.buildingRoot,
-                                                                        artIni,
-                                                                        paletteLibrary,
-                                                                        houseColors,
-                                                                        debugPanelState.style,
-                                                                        constructionYardId);
-          map.setOccupied(std::vector<TileCoord>{mcvUnit.occupiedCell}, false);
-          if (map.canPlace(foundationTiles(mcvTransition.placement))) {
-            const int maxHp = maxHpForBuilding(constructionYardAsset);
-            const int hp = std::clamp(static_cast<int>(std::round(mcvTransition.hpRatio *
-                                                                  static_cast<float>(maxHp))),
-                                      1,
-                                      maxHp);
-            buildings.push_back(BuildingInstance{
-              constructionYardId,
-              mcvTransition.placement,
-              constructionYardAsset.buildupTextures.empty() ? BuildingState::Complete : BuildingState::Constructing,
-              nowTicks,
-              maxHp,
-              hp
-            });
-            map.setOccupied(foundationTiles(mcvTransition.placement), true);
-            mcvActive = false;
-            mcvUnit.selected = false;
-            selectedBuildingIndex = buildings.size() - 1;
-          } else {
-            map.setOccupied(std::vector<TileCoord>{mcvUnit.occupiedCell}, true);
+          const auto cell = screenToIso(mouseX, mouseY, mapOrigin, DemoAppConfig::kTileWidth, DemoAppConfig::kTileHeight);
+          if (selectedBuildAsset) {
+            selectionGesture.cancel();
+            previewPlacement = placementFromAnchor(cell, selectedBuildAsset->foundation);
+            if (map.canPlace(foundationTiles(previewPlacement))) { send(ra2::CommandKind::PlaceBuilding, 0, cell, selectedBuildAsset->id); selectedBuildAsset = nullptr; }
+            else interactionMessage = "Placement blocked";
+            continue;
           }
-          mcvTransition = McvTransitionState{};
+          if (mouseX<0 || mouseY<0 || mouseX>=float(viewport.width)-DemoAppConfig::kSidebarWidth || mouseY>=viewport.height) continue;
+          if (isCtrlModifierDown() && selection.primary()) { sendSelection(ra2::CommandKind::AttackGround,cell); continue; }
+          selectionGesture.begin({mouseX,mouseY},(SDL_GetModState()&KMOD_SHIFT)!=0);
+          SDL_CaptureMouse(SDL_TRUE);
+          continue;
         }
-      } else if (mcvTransition.phase == McvTransitionPhase::PackingToVehicle) {
-        if (mcvTransition.buildingIndex >= buildings.size()) {
-          mcvTransition = McvTransitionState{};
-        } else {
-          const auto& packingBuilding = buildings[mcvTransition.buildingIndex];
-          const auto& packingAsset = ensureCachedAssetForStyle(buildingAssetCache,
-                                                               paths.buildingRoot,
-                                                               artIni,
-                                                               paletteLibrary,
-                                                               houseColors,
-                                                               debugPanelState.style,
-                                                               packingBuilding.assetId);
-          const auto packingDurationMs = buildingBuildupDurationMs(packingAsset);
-          if (packingDurationMs == 0 || nowTicks - packingBuilding.stateStartTicks >= packingDurationMs) {
-            const TileCoord mcvCell = mcvTransition.placement.topLeft;
-            map.setOccupied(foundationTiles(mcvTransition.placement), false);
-            buildings.erase(std::next(buildings.begin(),
-                                      static_cast<std::vector<BuildingInstance>::difference_type>(
-                                        mcvTransition.buildingIndex)));
-            selectedBuildingIndex.reset();
-            mcvFaction = mcvTransition.faction;
-            loadMcvAssetsForFaction(mcvRenderer, paths, mcvFaction, voxelLighting);
-            mcvRenderer.setPalette(palettesForTheater(paletteLibrary, debugPanelState.style.theater).unit);
-            initializeRhinoUnit(mcvUnit, map, mcvCell);
-            setRhinoDirectionIndex(mcvUnit, kMcvDeployDirectionIndex);
-            mcvUnit.maxHp = maxHpForObject(mcvUnitIdForFaction(mcvFaction));
-            mcvUnit.hp = std::clamp(static_cast<int>(std::round(mcvTransition.hpRatio *
-                                                               static_cast<float>(mcvUnit.maxHp))),
-                                   1,
-                                   mcvUnit.maxHp);
-            mcvUnit.selected = true;
-            mcvActive = true;
-            deselectRhinoTanks(rhinoTanks);
-            const auto pendingMoveTarget = mcvTransition.pendingMoveTarget;
-            mcvTransition = McvTransitionState{};
-            if (pendingMoveTarget.x != mcvCell.x || pendingMoveTarget.y != mcvCell.y) {
-              issueRhinoMoveCommand(mcvUnit, map, pendingMoveTarget, nowTicks);
-            }
+        if (mouseX<0 || mouseY<0 || mouseX>=float(viewport.width)-DemoAppConfig::kSidebarWidth || mouseY>=viewport.height) continue;
+        const auto cell = screenToIso(mouseX, mouseY, mapOrigin, DemoAppConfig::kTileWidth, DemoAppConfig::kTileHeight);
+        ra2::EntityId hit = 0;
+        if (const auto vehicle = hitTestRhinoTanks(rhinoTanks, mouseX, mouseY, mapOrigin, DemoAppConfig::kTileWidth, DemoAppConfig::kTileHeight)) hit = rhinoTanks[*vehicle].entityId;
+        else if (const auto building = hitTestBuildingAtPoint(*activeBuildingAssets, buildings, mouseX, mouseY, mapOrigin, DemoAppConfig::kTileWidth, DemoAppConfig::kTileHeight)) hit = presentation.buildingIds[*building];
+        const auto entities = world.snapshot();
+        if (release->additive) {
+          selection.toggleVehicle(hit,rhinoTanks);
+          continue;
+        }
+        const auto selectedView=std::find_if(entities.begin(),entities.end(),[&](const auto& item){return item.id==selection.primary() && item.owner==0;});
+        if (selection.size()==1 && selectedView!=entities.end() && selectedView->harvesting && !release->additive) {
+          const auto target=std::find_if(entities.begin(),entities.end(),[&](const auto& item){return item.id==hit;});
+          if (target!=entities.end() && target->owner==0 && definitions.unit(target->type).refinery) {
+            send(ra2::CommandKind::ReturnToRefinery,selection.primary(),cell,{},hit); continue;
           }
+          if ((!hit || hit==selection.primary()) && world.resourceAt(cell)) { send(ra2::CommandKind::Harvest,selection.primary(),cell); continue; }
         }
+        if (hit) {
+          const auto found = std::find_if(entities.begin(), entities.end(), [&](const auto& item) { return item.id == hit; });
+          if (found != entities.end() && found->owner != 0) {
+            if (sendSelection(ra2::CommandKind::AttackEntity,cell,hit)==0) selection.selectOne(hit);
+          }
+          else if (found != entities.end() && selection.size()==1 && selection.primary() == hit &&
+                   (!definitions.unit(found->type).deploysInto.empty() || !definitions.unit(found->type).undeploysInto.empty()))
+            send(ra2::CommandKind::Deploy, selection.primary());
+          else selection.selectOne(hit);
+        } else if (selection.primary()) sendSelection(ra2::CommandKind::Move,cell);
       }
 
+      presentation=ra2::makeWorldView(world,definitions,selection.ids());
+
+      std::optional<std::size_t> selectedBuildingIndex;
+      for (std::size_t i = 0; i < presentation.buildingIds.size(); ++i) if (presentation.buildingIds[i] == selection.primary()) selectedBuildingIndex = i;
       beginImGuiDebugPanelFrame();
       const ImGuiDebugPanelState previousDebugPanelState = debugPanelState;
-      const bool debugPanelChanged = drawImGuiDebugPanel(debugPanelState, houseColors);
+      bool debugPanelChanged = drawImGuiDebugPanel(debugPanelState, houseColors);
+      if (miningSmokeTest && (smokeTestFrames==15 || smokeTestFrames==30)) {
+        debugPanelState.style.theater = smokeTestFrames==15 ? TheaterStyle::Snow : TheaterStyle::Urban;
+        debugPanelChanged = true;
+      }
       if (debugPanelChanged) {
         const bool styleChanged = !sameVisualStyle(previousDebugPanelState.style, debugPanelState.style);
         const bool resolutionSelectionChanged =
@@ -1387,7 +743,7 @@ int main(int, char**) {
                                        selectedBuildAsset,
                                        previewPlacement);
           for (const auto& building : buildings) {
-            ensureCachedAssetForStyle(buildingAssetCache,
+            (void)ensureCachedAssetForStyle(buildingAssetCache,
                                       paths.buildingRoot,
                                       artIni,
                                       paletteLibrary,
@@ -1400,18 +756,6 @@ int main(int, char**) {
             previewPlacement = initialPlacement;
             destroySidebarAssets(sidebarAssets);
             sidebarAssets = loadSidebarAssetsForStyle(paths, debugPanelState.style, cameoPalette);
-            if (mcvActive && mcvTransition.phase == McvTransitionPhase::None) {
-              mcvFaction = debugPanelState.style.faction;
-              loadMcvAssetsForFaction(mcvRenderer, paths, mcvFaction, voxelLighting);
-              const float hpRatio = mcvUnit.maxHp > 0
-                                      ? static_cast<float>(mcvUnit.hp) / static_cast<float>(mcvUnit.maxHp)
-                                      : 1.0f;
-              mcvUnit.maxHp = maxHpForObject(mcvUnitIdForFaction(mcvFaction));
-              mcvUnit.hp = std::clamp(static_cast<int>(std::round(hpRatio * static_cast<float>(mcvUnit.maxHp))),
-                                      1,
-                                      mcvUnit.maxHp);
-              mcvUnit.selected = false;
-            }
             sidebarState = SidebarState{};
             updateSidebarStateForDemo(sidebarState, sidebarAssets, viewport.height, nowTicks);
           } else if (selectedBuildingId.has_value()) {
@@ -1429,11 +773,9 @@ int main(int, char**) {
           const auto& currentTheaterPalettes = palettesForTheater(paletteLibrary, debugPanelState.style.theater);
           if (theaterChanged) {
             renderer.setIndexedPalettes(currentTheaterPalettes.unit, currentTheaterPalettes.terrain);
-            rhinoRenderer.setPalette(currentTheaterPalettes.unit);
-            grizzlyRenderer.setPalette(currentTheaterPalettes.unit);
+            renderer.setResourcePalettes(currentTheaterPalettes.resource, animationPalette);
             setVehicleRendererCachePalette(vehicleRendererCache, currentTheaterPalettes.unit);
             grandCannonRenderer.setPalette(currentTheaterPalettes.unit);
-            mcvRenderer.setPalette(currentTheaterPalettes.unit);
           }
           renderer.setRemapColor(activeHouseColorValue(debugPanelState.style, houseColors));
         }
@@ -1458,7 +800,7 @@ int main(int, char**) {
         mouseY < static_cast<float>(viewport.height);
       const bool mouseCapturedByDebugPanel =
         imguiDebugPanelContainsPoint(debugPanelState, mouseX, mouseY) ||
-        (debugPanelState.visible && imguiDebugPanelWantsMouse());
+        imguiDebugPanelWantsMouse();
       if (selectedBuildAsset == nullptr && mouseInWorld && !mouseCapturedByDebugPanel) {
         hoveredBuildingIndex = hitTestBuildingAtPoint(*activeBuildingAssets,
                                                       buildings,
@@ -1472,6 +814,8 @@ int main(int, char**) {
       renderer.beginFrame(0.58f, 0.78f, 0.97f, 1.0f);
       gridRenderer.draw(mapOrigin, DemoAppConfig::kTileWidth, DemoAppConfig::kTileHeight);
       renderer.beginUiPass();
+      ra2::drawResources(renderer,resourceVisualAssets,debugPanelState.style.theater,
+                         world,definitions,mapOrigin,DemoAppConfig::kTileWidth,DemoAppConfig::kTileHeight);
 
       buildRenderQueue(*activeBuildingAssets,
                        buildings,
@@ -1487,18 +831,17 @@ int main(int, char**) {
 
       const auto& drawTheaterPalettes = palettesForTheater(paletteLibrary, debugPanelState.style.theater);
       auto drawRhinoTankInstance = [&](const RhinoUnitState& tank) {
-        VplBoxRenderer& vehicleRenderer = vehicleRendererForKind(tank.kind,
-                                                                 rhinoRenderer,
-                                                                 grizzlyRenderer,
-                                                                 vehicleRendererCache,
-                                                                 window,
-                                                                 paths,
-                                                                 voxelLighting,
-                                                                 drawTheaterPalettes.unit);
+        VplBoxRenderer& vehicleRenderer = vehicleRendererForType(definitions.unit(tank.typeId), vehicleRendererCache, window, paths, voxelLighting, drawTheaterPalettes.unit);
+        auto unitDebug = debugPanelState;
+        if (tank.owner != 0) {
+          unitDebug.style.houseColorIndex = (unitDebug.style.houseColorIndex + 1) % houseColors.colors.size();
+          for (std::size_t i = 0; i < houseColors.colors.size(); ++i) if (ra2::canonicalId(houseColors.colors[i].name) == "RED") unitDebug.style.houseColorIndex = i;
+        }
         auto renderState = buildRhinoTankRenderState(houseColors,
-                                                     debugPanelState,
-                                                     rhinoDirectionIndex(tank));
-        if (tank.kind == VehicleUnitKind::Rhino) {
+                                                     unitDebug,
+                                                     tank.headingRadians);
+        applyRhinoSurfaceTilt(renderState,tank.pitchDegrees,tank.rollDegrees);
+        {
           renderState.turretRotationDegrees =
             shortestAngleDelta(tank.headingRadians, tank.turretHeadingRadians) * 180.0f / kPi;
         }
@@ -1515,24 +858,14 @@ int main(int, char**) {
                       nowTicks,
                       renderState);
       };
-      auto warFactoryHasInternalTank = [&](const BuildingInstance& factory) {
-        for (const auto& tank : rhinoTanks) {
-          if (rhinoInsideWarFactoryFootprint(tank, factory)) {
-            return true;
-          }
-        }
-        return false;
-      };
 
       renderer.beginWorldPass();
       for (const auto& command : renderQueue) {
         const bool layeredWarFactory = isLayeredWarFactoryInstance(command.instance);
-        const bool hasInternalTank =
-          layeredWarFactory && warFactoryHasInternalTank(command.instance);
-        const bool sovietProductionSplit =
-          command.instance.assetId == "NAWEAP" && hasInternalTank;
+        const bool productionSplit =
+          layeredWarFactory && command.instance.productionSplit && command.instance.factoryExitActive;
 
-        if (sovietProductionSplit) {
+        if (productionSplit) {
           drawWarFactoryProductionUnderUnitLayers(renderer,
                                                   *command.asset,
                                                   command.instance,
@@ -1558,7 +891,7 @@ int main(int, char**) {
         }
 
         if (isCompleteGrandCannon(command.instance)) {
-          const auto anchor = grandCannonTurretAnchor(command.instance,
+          const auto anchor = grandCannonTurretAnchor(command.instance, definitions.rules(),
                                                       mapOrigin,
                                                       DemoAppConfig::kTileWidth,
                                                       DemoAppConfig::kTileHeight);
@@ -1579,11 +912,11 @@ int main(int, char**) {
 
         if (layeredWarFactory) {
           for (const auto& tank : rhinoTanks) {
-            if (rhinoInsideWarFactoryFootprint(tank, command.instance)) {
+            if (ra2::isFactoryExitVehicle(tank, command.instance)) {
               drawRhinoTankInstance(tank);
             }
           }
-          if (command.instance.assetId == "GAWEAP" || sovietProductionSplit) {
+          if (command.instance.deferOverUnit || productionSplit) {
             drawWarFactoryOverUnitLayers(renderer,
                                          *command.asset,
                                          command.instance,
@@ -1592,36 +925,23 @@ int main(int, char**) {
                                          DemoAppConfig::kTileHeight,
                                          nowTicks,
                                          command.depth01,
-                                         sovietProductionSplit);
+                                         productionSplit);
           }
         }
       }
 
-      if (mcvActive) {
-        drawRhinoUnit(renderer,
-                      mcvRenderer,
-                      rhinoUiAssets,
-                      mcvUnit,
-                      mapOrigin,
-                      DemoAppConfig::kTileWidth,
-                      DemoAppConfig::kTileHeight,
-                      debugPanelState.rhinoPlacement.footprintK,
-                      viewport.width,
-                      viewport.height,
-                      nowTicks,
-                      buildRhinoTankRenderState(houseColors,
-                                                debugPanelState,
-                                                rhinoDirectionIndex(mcvUnit)));
-      }
+
 
       for (const auto& tank : rhinoTanks) {
-        if (rhinoInsideAnyWarFactoryFootprint(tank, buildings)) {
+        if (drawnWithFactory(tank, buildings)) {
           continue;
         }
         drawRhinoTankInstance(tank);
       }
 
       renderer.beginWorldPass();
+      ra2::drawGathering(renderer,resourceVisualAssets,world,definitions,
+                         mapOrigin,DemoAppConfig::kTileWidth,DemoAppConfig::kTileHeight);
       drawWeaponProjectilesAndEffects(renderer,
                                       weaponVisualAssets,
                                       projectiles,
@@ -1630,22 +950,10 @@ int main(int, char**) {
                                       DemoAppConfig::kTileWidth,
                                       DemoAppConfig::kTileHeight);
 
-      if (mcvActive) {
-        redrawBuildingOccludersForRhino(renderer,
-                                        *activeBuildingAssets,
-                                        buildings,
-                                        mcvUnit,
-                                        mapOrigin,
-                                        DemoAppConfig::kTileWidth,
-                                        DemoAppConfig::kTileHeight,
-                                        viewport.width,
-                                        viewport.height,
-                                        debugPanelState.rhinoPlacement.footprintK,
-                                        nowTicks);
-      }
+
 
       for (const auto& tank : rhinoTanks) {
-        if (rhinoInsideAnyWarFactoryFootprint(tank, buildings)) {
+        if (drawnWithFactory(tank, buildings)) {
           continue;
         }
         redrawBuildingOccludersForRhino(renderer,
@@ -1684,13 +992,136 @@ int main(int, char**) {
                                 mapOrigin,
                                 DemoAppConfig::kTileWidth,
                                 DemoAppConfig::kTileHeight);
+      ra2::drawHarvesterCargo(renderer,world,selection.primary(),mapOrigin,DemoAppConfig::kTileWidth,DemoAppConfig::kTileHeight);
       drawSidebar(renderer,
                   static_cast<float>(viewport.width),
                   static_cast<float>(viewport.height),
                   sidebarAssets,
                   sidebarState);
+      if (mouseInWorld && !mouseCapturedByDebugPanel && !hoveredBuildingIndex && !selectedBuildAsset) {
+        const auto cell=screenToIso(mouseX,mouseY,mapOrigin,DemoAppConfig::kTileWidth,DemoAppConfig::kTileHeight);
+        if (const auto resource=world.resourceAt(cell)) {
+          const auto& mineral=definitions.resource(resource->type);
+          ImGui::BeginTooltip();
+          ImGui::TextUnformatted(mineral.image==2 ? "宝石" : "矿石");
+          ImGui::Text("剩余 %d 单位  ·  每单位 $%d",resource->amount,mineral.value);
+          ImGui::Text("本格总价值 $%lld",static_cast<long long>(resource->amount)*mineral.value);
+          ImGui::EndTooltip();
+        }
+      }
+      ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_Once);
+      ImGui::SetNextWindowBgAlpha(0.82f);
+      if (ImGui::Begin("Simulation", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("左键框选/移动/攻击，Shift 增选，Ctrl+左键强制攻击");
+        ImGui::TextUnformatted("S 整组停止，D 部署，右键取消选择");
+        if (selection.size()>1) ImGui::Text("已选中 %zu 个单位",selection.size());
+        ImGui::TextUnformatted("矿车：点矿区采集，点己方矿场卸货，H 自动采矿");
+        drawGameSpeedControls(debugPanelState.gameplay);
+        ImGui::Text("实际逻辑：%.1f 帧/秒    绘制：%.1f FPS", measuredGameFps, ImGui::GetIO().Framerate);
+        ImGui::Text("Tick: %llu  Credits: %d  Entities: %zu", static_cast<unsigned long long>(world.tick()), world.credits(), world.snapshot().size());
+        if (!interactionMessage.empty()) ImGui::TextWrapped("%s", interactionMessage.c_str());
+        if (!world.lastMessage().empty()) ImGui::TextWrapped("%s", world.lastMessage().c_str());
+        for (const auto& entity : world.snapshot()) if (entity.id == selection.primary()) {
+          ImGui::Text("%s  HP %d / %d", entity.type.c_str(), entity.hp, entity.maxHp);
+          if(entity.harvesting) {
+            const auto& cargo=*entity.harvesting;
+            ImGui::Text("货舱 %d / %d    价值 $%d",cargo.cargo,cargo.capacity,cargo.value);
+            ImGui::ProgressBar(static_cast<float>(cargo.cargo)/cargo.capacity,ImVec2(-1,0),ra2::harvestPhaseName(cargo.phase));
+            if(ImGui::Button("自动采矿")) send(ra2::CommandKind::Harvest,selection.primary(),entity.cell);
+          }
+          switch (entity.factoryPhase) {
+            case ra2::FactoryExitPhase::Blocked: ImGui::TextUnformatted("出口堵塞，等待通道空闲"); break;
+            case ra2::FactoryExitPhase::Preparing: ImGui::TextUnformatted("出车准备中"); break;
+            case ra2::FactoryExitPhase::Driving: ImGui::TextUnformatted("车辆正在驶出"); break;
+            case ra2::FactoryExitPhase::Clearing: ImGui::TextUnformatted("出车收尾中"); break;
+            default: break;
+          }
+          if (entity.activity == ra2::Activity::LeavingFactory)
+            ImGui::TextUnformatted(entity.hasDeferredCommand ? "正在出厂，驶离后执行新命令" : "正在出厂");
+          if (entity.queueSize) {
+            ImGui::Text("%s  Queue: %zu", entity.productionType.c_str(), entity.queueSize);
+            ImGui::ProgressBar(1.0f - static_cast<float>(entity.productionRemaining) / std::max(1, entity.productionTotal));
+            if (ImGui::Button("取消最后一项")) send(ra2::CommandKind::CancelProduction, selection.primary());
+          }
+        }
+      }
+      ImGui::End();
+      if (gameSpeedSmokeTest) {
+        const auto advanced = world.tick() - speedSmokePreviousFrame;
+        const auto rate = ra2::targetGameFrameRate(smokeSpeeds[smokeTestFrames]);
+        if ((rate && advanced != static_cast<ra2::Tick>(*rate / 10)) || (!rate && (advanced < 8 || advanced % 8 != 0)))
+          throw std::runtime_error("Game speed render-loop smoke assertion failed");
+        std::cout << "Speed smoke render " << smokeTestFrames << ": " << advanced << " game frames\n";
+        speedSmokePreviousFrame = world.tick();
+        if (smokeTestFrames + 1 < static_cast<int>(smokeSpeeds.size()))
+          debugPanelState.gameplay.speed = smokeSpeeds[smokeTestFrames + 1];
+      }
+      world.setGameSpeed(debugPanelState.gameplay.speed);
+      if (selectionGesture.dragging()) {
+        const auto box=selectionGesture.rectangle();
+        auto* overlay=ImGui::GetForegroundDrawList();
+        overlay->AddRectFilled(ImVec2(box.left,box.top),ImVec2(box.right,box.bottom),IM_COL32(64,255,100,20));
+        overlay->AddRect(ImVec2(box.left,box.top),ImVec2(box.right,box.bottom),IM_COL32(64,255,100,255),0,0,1.5f);
+      }
       renderImGuiDebugPanel();
+      const std::array<ra2::Tick,7> buildingCaptureFrames{1,20,47,73,74,145,191};
+      const bool captureBuilding = buildingSmokeTest && std::find(buildingCaptureFrames.begin(),buildingCaptureFrames.end(),world.tick())!=buildingCaptureFrames.end();
+      const std::array<ra2::Tick,10> tankCaptureFrames{1,8,16,24,30,34,38,48,80,120};
+      const bool captureTank=tankSmokeTest && std::find(tankCaptureFrames.begin(),tankCaptureFrames.end(),world.tick())!=tankCaptureFrames.end();
+      const std::array<ra2::Tick,5> selectionCaptureFrames{2,3,7,60,140};
+      const bool captureSelection=selectionSmokeTest && std::find(selectionCaptureFrames.begin(),selectionCaptureFrames.end(),world.tick())!=selectionCaptureFrames.end();
+      if (((simulationSmokeTest && (smokeTestFrames == 31 || smokeTestFrames == 35)) || captureBuilding || captureTank || captureSelection || (miningSmokeTest && (smokeTestFrames==9 || smokeTestFrames==24 || smokeTestFrames==44))) && argc == 3) {
+        std::vector<unsigned char> pixels(static_cast<std::size_t>(viewport.width) * viewport.height * 4);
+        glReadPixels(0, 0, viewport.width, viewport.height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        const auto pitch = static_cast<std::size_t>(viewport.width) * 4;
+        for (int y = 0; y < viewport.height / 2; ++y) std::swap_ranges(pixels.begin() + y * pitch, pixels.begin() + (y + 1) * pitch, pixels.begin() + (viewport.height - y - 1) * pitch);
+        SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom(pixels.data(), viewport.width, viewport.height, 32, static_cast<int>(pitch), SDL_PIXELFORMAT_RGBA32);
+        if (!surface) throw std::runtime_error(SDL_GetError());
+        auto output = std::filesystem::path(argv[2]);
+        if (captureBuilding || captureTank || captureSelection) output.replace_filename(output.stem().string() + "-frame-" + std::to_string(world.tick()) + ".bmp");
+        else if (miningSmokeTest) output.replace_filename(output.stem().string() + "-frame-" + std::to_string(world.tick()) + ".bmp");
+        else if (smokeTestFrames == 31) output.replace_filename(output.stem().string() + "-egress.bmp");
+        const int saved = SDL_SaveBMP(surface, output.string().c_str());
+        SDL_FreeSurface(surface);
+        if (saved != 0) throw std::runtime_error(SDL_GetError());
+      }
       SDL_GL_SwapWindow(window);
+      if (smokeTest && ++smokeTestFrames >= (selectionSmokeTest ? 140 : tankSmokeTest ? 120 : miningSmokeTest ? 45 : buildingSmokeTest ? 192 : simulationSmokeTest ? 36 : gameSpeedSmokeTest ? static_cast<int>(smokeSpeeds.size()) : 3)) {
+        if(selectionSmokeTest) {
+          const auto entities=world.snapshot();
+          std::vector<TileCoord> destinations;
+          for(const auto& entity:entities) if(selection.contains(entity.id)) {
+            if(entity.cell!=entity.destination || std::abs(entity.cell.x-10)>1 || std::abs(entity.cell.y-8)>1)
+              throw std::runtime_error("Box-selected tank failed to arrive at group destination");
+            destinations.push_back(entity.cell);
+          }
+          if(selection.size()!=2 || !selection.contains(2) || !selection.contains(selectionSmokeUnit) ||
+              destinations.size()!=2 || destinations[0]==destinations[1] || glGetError()!=GL_NO_ERROR)
+            throw std::runtime_error("Box selection/group command presentation smoke assertions failed");
+        }
+        if (tankSmokeTest && (!sawMovingTurret || !sawShell || !sawExplosion || glGetError()!=GL_NO_ERROR))
+          throw std::runtime_error("Tank movement/turret/projectile presentation smoke assertions failed");
+        if (miningSmokeTest && glGetError()!=GL_NO_ERROR)
+          throw std::runtime_error("OpenGL error while rendering original mining assets");
+        if(miningSmokeTest && (!sawMiningCargo || !sawMiningReturn || world.credits()<=definitions.profile().startingCredits))
+          throw std::runtime_error("Mining presentation/income smoke assertions failed");
+        if (buildingSmokeTest) {
+          if (!sawBuildup[0] || !sawBuildup[1] || !sawComplete[0] || !sawComplete[1] || !sawPacking[0] || !sawPacking[1])
+            throw std::runtime_error("Construction yard animation phase missing");
+          for (const auto& entity : world.snapshot()) if ((entity.id==testMcv && entity.type!="AMCV") ||
+                                                         (entity.id==testSovietMcv && entity.type!="SMCV"))
+            throw std::runtime_error("Construction yard did not finish packing");
+        }
+        if (simulationSmokeTest) {
+          bool deployed = false, enemyAlive = false;
+          for (const auto& entity : world.snapshot()) {
+            if (entity.id == testMcv && entity.type == "GACNST") deployed = true;
+            if (entity.id == 4) enemyAlive = true;
+          }
+          if (!deployed || enemyAlive || !sawCombatDamage || !sawInternalExit || world.snapshot().size() != 9) throw std::runtime_error("Simulation/presentation smoke assertions failed");
+        }
+        running = false;
+      }
     }
 
     cleanupApp(window,
@@ -1705,7 +1136,8 @@ int main(int, char**) {
                sidebarAssets,
                buildingAssetCache,
                rhinoUiAssets,
-               weaponVisualAssets);
+               weaponVisualAssets,
+               resourceVisualAssets);
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << ex.what() << '\n';
@@ -1721,7 +1153,8 @@ int main(int, char**) {
                sidebarAssets,
                buildingAssetCache,
                rhinoUiAssets,
-               weaponVisualAssets);
+               weaponVisualAssets,
+               resourceVisualAssets);
     return 1;
   }
 }

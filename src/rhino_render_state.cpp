@@ -84,6 +84,12 @@ struct Matrix4f {
 }
 }  // namespace
 
+void applyRhinoSurfaceTilt(VplBoxRendererState& state, float pitchDegrees, float rollDegrees) {
+  const auto tilt=multiply(makeRotationYMatrix(degToRad(-pitchDegrees)),makeRotationXMatrix(degToRad(-rollDegrees)));
+  const Matrix4f world{state.worldTransform};
+  state.worldTransform=multiply(tilt,world).values;
+}
+
 VplBoxRendererState buildRhinoTankRenderState(const HouseColorSet& houseColors,
                                               const ImGuiDebugPanelState& debugPanelState) {
   return buildRhinoTankRenderState(houseColors, debugPanelState, debugPanelState.rhinoPlacement.direction);

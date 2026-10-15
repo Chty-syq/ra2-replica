@@ -1,0 +1,5 @@
+GLM 1.0.3
+Source: https://github.com/g-truc/glm/releases/tag/1.0.3
+Commit: 8d1fd52e5ab5590e2c81768ace50c72bae28f2ed
+Archive SHA256: 3aa4347b8f13cba882df1c7b61a6ca910c75a875c56ec3d75d7dc9ae8eac34df
+Only the upstream glm directory and copying.txt are vendored.

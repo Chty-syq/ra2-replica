@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 
 TmpFile TmpFile::load(const std::filesystem::path& path) {
@@ -32,22 +33,32 @@ TmpTile TmpFile::decodeSingleTile(const Palette& palette) const {
   }
 
   const auto cellHeaderOffset = readU32(bytes_, 16);
-  const std::size_t imageDataOffset = cellHeaderOffset + 32;
-  if (imageDataOffset >= bytes_.size()) {
+  if (cellHeaderOffset < 20 || cellHeaderOffset > bytes_.size() ||
+      bytes_.size() - cellHeaderOffset < 32) {
     throw std::runtime_error("TMP image data offset is out of range");
   }
+  const std::size_t imageDataOffset = static_cast<std::size_t>(cellHeaderOffset) + 32;
 
-  if (imageHeight_ == 0 || (imageHeight_ % 2) != 0) {
+  if (imageWidth_ == 0 || imageHeight_ == 0 || (imageHeight_ % 2) != 0) {
     throw std::runtime_error("Unexpected TMP dimensions");
   }
 
   const auto halfRows = imageHeight_ / 2;
+  if (imageWidth_ % halfRows != 0) {
+    throw std::runtime_error("Unexpected TMP diamond dimensions");
+  }
   const auto rowStep = imageWidth_ / halfRows;
+  const auto payloadSize = static_cast<std::uint64_t>(imageWidth_) * (halfRows + 1);
+  const auto pixelCount = static_cast<std::uint64_t>(imageWidth_) * imageHeight_;
+  if (payloadSize > bytes_.size() - imageDataOffset ||
+      pixelCount > std::numeric_limits<std::size_t>::max() / 4) {
+    throw std::runtime_error("TMP image payload overruns file or dimensions are too large");
+  }
 
   TmpTile tile;
   tile.width = imageWidth_;
   tile.height = imageHeight_;
-  tile.rgba.assign(static_cast<std::size_t>(imageWidth_ * imageHeight_ * 4), 0);
+  tile.rgba.assign(static_cast<std::size_t>(pixelCount) * 4, 0);
 
   std::size_t src = imageDataOffset;
   for (std::uint32_t y = 0; y < imageHeight_; ++y) {
@@ -62,7 +73,7 @@ TmpTile TmpFile::decodeSingleTile(const Palette& palette) const {
       }
 
       const auto color = palette.color(bytes_[src++]);
-      const std::size_t dst = static_cast<std::size_t>((y * imageWidth_ + rowStartX + x) * 4);
+      const std::size_t dst = (static_cast<std::size_t>(y) * imageWidth_ + rowStartX + x) * 4;
       tile.rgba[dst + 0] = color.r;
       tile.rgba[dst + 1] = color.g;
       tile.rgba[dst + 2] = color.b;

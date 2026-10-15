@@ -237,6 +237,7 @@ struct LayerSpec {
   std::string spriteName;
   std::optional<std::string> animationId;
   BuildingAsset::LayerRole role = BuildingAsset::LayerRole::Normal;
+  BuildingAnimationPlacement placement{};
 };
 
 [[nodiscard]] std::string resolveTheaterVariant(const std::filesystem::path& spriteRoot,
@@ -323,146 +324,29 @@ struct LayerSpec {
 }
 
 [[nodiscard]] std::vector<LayerSpec> completeLayerSpecsForBuilding(const std::string& buildingId,
+                                                                   const ArtIni& artIni,
                                                                    const ArtDefinition& art,
                                                                    const std::string& spriteName) {
-  const auto baseName = toLowerAscii(spriteName);
-  const auto bibName = art.bibShape.has_value() ? toLowerAscii(*art.bibShape) : std::string{};
-
   std::vector<LayerSpec> specs;
-  auto addStatic = [&](std::string layerName,
-                       const BuildingAsset::LayerRole role = BuildingAsset::LayerRole::Normal) {
-    layerName = toLowerAscii(std::move(layerName));
-    if (!layerName.empty()) {
-      specs.push_back(LayerSpec{std::move(layerName), std::nullopt, role});
-    }
-  };
-  auto addAnimated = [&](const std::optional<std::string>& animationId,
-                         const BuildingAsset::LayerRole role = BuildingAsset::LayerRole::Normal) {
-    if (animationId.has_value() && !animationId->empty()) {
-      specs.push_back(LayerSpec{"", *animationId, role});
-    }
-  };
-
-  if (buildingId == "GAPOWR") {
-    addStatic(baseName);
-    addAnimated(art.activeAnim);
-    return specs;
+  for (const auto& layer : art.layers) {
+    LayerSpec spec;
+    const auto source = ra2::canonicalId(layer.source);
+    if (source == "BASE") spec.spriteName = spriteName;
+    else if (source.starts_with("BASE_")) spec.spriteName = spriteName + layer.source.substr(4);
+    else if (source == "BIB") spec.spriteName = art.bibShape.value_or("");
+    else if (source.starts_with("ANIM.")) {
+      const auto animation = artIni.field(buildingId, layer.source.substr(5));
+      if (animation.empty()) continue;
+      spec.animationId = animation;
+      spec.placement = artIni.animationPlacement(buildingId, layer.source.substr(5));
+    } else spec.spriteName = layer.source;
+    if (layer.role == "UNDERUNIT") spec.role = BuildingAsset::LayerRole::UnderUnit;
+    else if (layer.role == "OVERUNIT") spec.role = BuildingAsset::LayerRole::OverUnit;
+    else if (layer.role == "PRODUCTIONUNDERUNIT") spec.role = BuildingAsset::LayerRole::ProductionUnderUnit;
+    else if (layer.role == "PRODUCTIONOVERUNIT") spec.role = BuildingAsset::LayerRole::ProductionOverUnit;
+    else if (layer.role != "NORMAL") throw std::runtime_error("Unknown layer role in " + buildingId + ": " + layer.role);
+    if (spec.animationId || !spec.spriteName.empty()) specs.push_back(std::move(spec));
   }
-  if (buildingId == "GAPILE") {
-    addStatic(baseName);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GATECH") {
-    addStatic(baseName);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GAOREP") {
-    addStatic(baseName);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GAGAP") {
-    addStatic(baseName);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GAPRIS") {
-    addStatic(baseName);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GAREFN") {
-    addStatic(baseName);
-    addStatic(bibName);
-    addAnimated(art.activeAnimThree);
-    addAnimated(art.activeAnimTwo);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GAWEAP") {
-    // GAWEAP is assembled from same-canvas component SHPs. Drawing gaweap.shp
-    // as an extra base layer duplicates the factory exit ramp and breaks unit occlusion.
-    addStatic(baseName + "_1", BuildingAsset::LayerRole::UnderUnit);
-    addStatic(baseName + "_2", BuildingAsset::LayerRole::OverUnit);
-    addAnimated(art.activeAnim, BuildingAsset::LayerRole::OverUnit);
-    addAnimated(art.activeAnimTwo, BuildingAsset::LayerRole::OverUnit);
-    addStatic(bibName, BuildingAsset::LayerRole::UnderUnit);
-    return specs;
-  }
-  if (buildingId == "NAWEAP") {
-    // 常态：NAWEAP + NAWEAP_A + NAWEAPBB，其中 bib 位于底层。
-    // 出厂：NAWEAP_1 + NAWEAP_2 + NAWEAP_A + NAWEAPBB，其中 _1 和 bib 位于坦克下方。
-    addStatic(baseName);
-    addStatic(baseName + "_1", BuildingAsset::LayerRole::ProductionUnderUnit);
-    addStatic(bibName, BuildingAsset::LayerRole::UnderUnit);
-    addAnimated(art.activeAnim);
-    addStatic(baseName + "_2", BuildingAsset::LayerRole::ProductionOverUnit);
-    addAnimated(art.activeAnim, BuildingAsset::LayerRole::ProductionOverUnit);
-    return specs;
-  }
-  if (buildingId == "GAAIRC") {
-    addStatic(baseName);
-    addAnimated(art.activeAnimThree);
-    addStatic(bibName);
-    addAnimated(art.activeAnimTwo);
-    addAnimated(art.activeAnim);
-    return specs;
-  }
-  if (buildingId == "GAYARD") {
-    addStatic(baseName);
-    addAnimated(art.activeAnimThree);
-    addAnimated(art.productionAnim);
-    return specs;
-  }
-  if (buildingId == "NAYARD") {
-    addStatic(baseName);
-    addAnimated(art.activeAnimThree);
-    // 船厂的 SpecialAnim 是停靠/离港状态动画，不能在完整态全部叠加。
-    addAnimated(art.productionAnim);
-    return specs;
-  }
-  if (buildingId == "GADEPT") {
-    addStatic(baseName);
-    addStatic(bibName);
-    addAnimated(art.idleAnim);
-    return specs;
-  }
-  if (buildingId == "NADEPT") {
-    addStatic(baseName);
-    addStatic(bibName);
-    // 维修臂的 C1/C2/C3 是伸出、工作、收回状态；常驻完整态只保留底座工作动画。
-    addAnimated(art.idleAnim);
-    return specs;
-  }
-  if (buildingId == "GACSPH") {
-    addStatic(baseName);
-    addAnimated(art.superAnim);
-    return specs;
-  }
-  if (buildingId == "GAWETH") {
-    addStatic(baseName);
-    addAnimated(art.superAnim);
-    return specs;
-  }
-
-  addStatic(baseName);
-  addStatic(bibName);
-  addAnimated(art.idleAnim);
-  addAnimated(art.activeAnim);
-  addAnimated(art.activeAnimTwo);
-  addAnimated(art.activeAnimThree);
-  addAnimated(art.activeAnimFour);
-  addAnimated(art.specialAnim);
-  addAnimated(art.specialAnimTwo);
-  addAnimated(art.specialAnimThree);
-  addAnimated(art.specialAnimFour);
-  addAnimated(art.superAnim);
-  addAnimated(art.superAnimTwo);
-  addAnimated(art.superAnimThree);
-  addAnimated(art.superAnimFour);
-  addAnimated(art.productionAnim);
   return specs;
 }
 
@@ -521,7 +405,8 @@ struct LayerSpec {
                                                          const TheaterStyle theater,
                                                          const bool newTheater) {
   const auto resolvedName = resolveTheaterVariant(spriteRoot, spriteName, theater, newTheater, false);
-  const auto& frames = decodedFramesForPath(requireShpPath(spriteRoot, resolvedName));
+  const auto path = requireShpPath(spriteRoot, resolvedName);
+  const auto& frames = decodedFramesForPath(path);
   const auto& frame = frames.front();
   return BuildingAsset::RenderLayer{
     resolvedName,
@@ -548,7 +433,6 @@ struct LayerSpec {
                                                            const TheaterStyle theater,
                                                            const bool newTheater) {
   const auto animation = artIni.animation(animationId);
-  const auto normalizedAnimationId = toLowerAscii(animationId);
   const auto spriteName = resolveAnimatedLayerName(spriteRoot, artIni, animationId, theater, newTheater);
   const auto path = findIndexedFile(spriteRoot, spriteName + ".shp");
   if (!path.has_value()) {
@@ -561,29 +445,10 @@ struct LayerSpec {
     frameIndices.push_back(0);
   }
 
-  if (buildingId == "GAPOWR" && frameIndices.size() > 8) {
-    frameIndices.resize(8);
-  }
-  if (normalizedAnimationId == "gaairc_b" && frameIndices.size() > 6) {
-    frameIndices.resize(6);
-  }
-  if (normalizedAnimationId == "gaairc_a" && frameIndices.size() > 4) {
-    frameIndices.resize(4);
-  }
-  if (normalizedAnimationId == "gadept_d" && frameIndices.size() > 1) {
-    frameIndices.resize(1);
-  }
-  if ((normalizedAnimationId == "gayard_d" || normalizedAnimationId == "nayard_d") &&
-      frameIndices.size() > 1) {
-    // ProductionAnim 是一次性生产状态动画；完整态先固定首帧，避免吊钩常驻循环和无谓加载大帧序列。
-    frameIndices.resize(1);
-  }
-  if (normalizedAnimationId == "gaorep_a" && frameIndices.size() > 8) {
-    frameIndices.resize(8);
-  }
-  if (normalizedAnimationId == "gaweap_a" && frameIndices.size() > 15) {
-    frameIndices.resize(15);
-  }
+  const int typeLimit = artIni.building(buildingId).animationFrameLimit;
+  const int animationLimit = artIni.animationFrameLimit(animationId);
+  const int limit = animationLimit > 0 ? animationLimit : typeLimit;
+  if (limit > 0 && frameIndices.size() > static_cast<std::size_t>(limit)) frameIndices.resize(static_cast<std::size_t>(limit));
 
   std::vector<UiTexture> textures;
   textures.reserve(frameIndices.size());
@@ -601,11 +466,14 @@ struct LayerSpec {
     });
   }
 
-  const auto rate = animation.rate.value_or(220);
   return BuildingAsset::RenderLayer{
     spriteName,
     std::move(textures),
-    rate > 0 ? static_cast<std::uint32_t>(rate) : 0
+    0,
+    BuildingAsset::LayerRole::Normal,
+    std::move(frameIndices),
+    animation.rate && *animation.rate != -1 ? ra2::compat::animationDelay(*animation.rate) : 1,
+    animation.normalized
   };
 }
 
@@ -618,7 +486,7 @@ struct LayerSpec {
                                                                          const std::string& spriteName,
                                                                          const TheaterStyle theater) {
   std::vector<BuildingAsset::RenderLayer> layers;
-  for (const auto& spec : completeLayerSpecsForBuilding(buildingId, art, spriteName)) {
+  for (const auto& spec : completeLayerSpecsForBuilding(buildingId, artIni, art, spriteName)) {
     if (spec.animationId.has_value()) {
       auto layer = loadAnimatedLayer(spriteRoot,
                                      artIni,
@@ -630,6 +498,11 @@ struct LayerSpec {
                                      art.newTheater);
       if (!layer.textures.empty()) {
         layer.role = spec.role;
+        const auto animation = artIni.animation(*spec.animationId);
+        layer.offset = {spec.placement.offset.x, spec.placement.offset.y + animation.yDrawOffset};
+        layer.zAdjust = spec.placement.zAdjust;
+        layer.ySort = spec.placement.ySort;
+        layer.normalZAdjust = animation.normalZAdjust;
         layers.push_back(std::move(layer));
       }
       continue;
@@ -659,7 +532,8 @@ struct LayerSpec {
 
 [[nodiscard]] DecodedFrame loadFirstDecodedFrame(const std::filesystem::path& spriteRoot,
                                                  const std::string& spriteName) {
-  const auto& frames = decodedFramesForPath(requireShpPath(spriteRoot, spriteName));
+  const auto path = requireShpPath(spriteRoot, spriteName);
+  const auto& frames = decodedFramesForPath(path);
   return frames.front();
 }
 
@@ -703,7 +577,6 @@ struct LayerSpec {
   }
 
   const auto completeFrame = loadFirstDecodedFrame(spriteRoot, baseLayerName);
-  const auto completeAnchor = spriteAnchorInFrame(completeFrame, art.foundation.value_or(FoundationSize{2, 2}));
 
   for (auto& layer : completeLayers) {
     for (std::size_t textureIndex = 0; textureIndex < layer.textures.size(); ++textureIndex) {
@@ -716,12 +589,12 @@ struct LayerSpec {
         continue;
       }
 
-      std::size_t frameIndex = 0;
-      if (layer.textures.size() > 1 && textureIndex < frames.size()) {
-        frameIndex = textureIndex;
-      }
+      std::size_t frameIndex = textureIndex < layer.sourceFrames.size() ? layer.sourceFrames[textureIndex] : 0;
       frameIndex = std::min(frameIndex, frames.size() - 1);
-      attachLogicalCoordTexture(layer.textures[textureIndex], frames[frameIndex], completeAnchor);
+      auto anchor = spriteAnchorInFrame(frames[frameIndex]);
+      anchor.x -= layer.offset.x;
+      anchor.y -= layer.offset.y;
+      attachLogicalCoordTexture(layer.textures[textureIndex], frames[frameIndex], anchor);
     }
   }
 
@@ -733,7 +606,7 @@ struct LayerSpec {
     for (std::size_t frameIndex = 0; frameIndex < buildupTextures.size() && frameIndex < buildupFrames.size(); ++frameIndex) {
       attachLogicalCoordTexture(buildupTextures[frameIndex],
                                 buildupFrames[frameIndex],
-                                spriteAnchorInFrame(buildupFrames[frameIndex], art.foundation.value_or(FoundationSize{2, 2})));
+                                spriteAnchorInFrame(buildupFrames[frameIndex]));
     }
   }
 
@@ -742,7 +615,7 @@ struct LayerSpec {
   return BuildingAsset{
     buildingId,
     art,
-    art.foundation.value_or(FoundationSize{2, 2}),
+    art.foundation.value_or(FoundationSize{1, 1}),
     completeTexture,
     completeFrame,
     std::move(completeLayers),

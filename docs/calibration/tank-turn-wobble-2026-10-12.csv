@@ -1,0 +1,7 @@
+route_x,route_y,version,game_frames,min_heading_degrees,max_heading_degrees,total_turn_degrees
+10,1,before_corner_fix,179,-7.05322,52.0642,73.2349
+10,1,after_corner_fix,178,0,45,45
+10,5,before_corner_fix,207,-7.05322,52.0422,73.7402
+10,5,after_corner_fix,206,0,45,45
+5,10,before_corner_fix,219,0,97.0532,163.652
+5,10,after_corner_fix,218,0,90,135

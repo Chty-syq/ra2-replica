@@ -238,6 +238,8 @@ void Renderer2D::initialize(const int viewportWidth, const int viewportHeight) {
 
   glGenTextures(1, &unitPaletteTexture_);
   glGenTextures(1, &terrainPaletteTexture_);
+  glGenTextures(1, &resourcePaletteTexture_);
+  glGenTextures(1, &animationPaletteTexture_);
 
   glUseProgramPtr(program_);
   glUniform1iPtr(textureUniform_, 0);
@@ -284,6 +286,14 @@ void Renderer2D::destroy() {
   if (terrainPaletteTexture_ != 0) {
     glDeleteTextures(1, &terrainPaletteTexture_);
     terrainPaletteTexture_ = 0;
+  }
+  if (resourcePaletteTexture_ != 0) {
+    glDeleteTextures(1, &resourcePaletteTexture_);
+    resourcePaletteTexture_ = 0;
+  }
+  if (animationPaletteTexture_ != 0) {
+    glDeleteTextures(1, &animationPaletteTexture_);
+    animationPaletteTexture_ = 0;
   }
 
   initialized_ = false;
@@ -386,6 +396,12 @@ void Renderer2D::setIndexedPalettes(const Palette& unitPalette, const Palette& t
                        PaletteSampleOptions{kDefaultBuildingMapBrightness, false});
 }
 
+void Renderer2D::setResourcePalettes(const Palette& resourcePalette, const Palette& animationPalette) {
+  ensureInitialized();
+  uploadPaletteTexture(resourcePaletteTexture_, resourcePalette, {});
+  uploadPaletteTexture(animationPaletteTexture_, animationPalette, {});
+}
+
 void Renderer2D::setRemapColor(const Rgba& color) noexcept {
   remapColor_ = color;
 }
@@ -447,6 +463,12 @@ void Renderer2D::drawInternal(const GLenum primitiveMode,
       break;
     case UiTexturePaletteKind::Terrain:
       glBindTexture(GL_TEXTURE_2D, terrainPaletteTexture_);
+      break;
+    case UiTexturePaletteKind::Resource:
+      glBindTexture(GL_TEXTURE_2D, resourcePaletteTexture_);
+      break;
+    case UiTexturePaletteKind::Animation:
+      glBindTexture(GL_TEXTURE_2D, animationPaletteTexture_);
       break;
     case UiTexturePaletteKind::None:
       glBindTexture(GL_TEXTURE_2D, whiteTexture_);

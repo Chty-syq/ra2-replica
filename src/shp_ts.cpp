@@ -85,132 +85,78 @@ DecodedFrame ShpTsFile::decodeFrame(const std::size_t frameIndex) const {
     throw std::runtime_error("SHP frame data offset is out of range");
   }
 
+  if (static_cast<std::size_t>(frame.frameX) + frame.frameWidth > fullWidth_ ||
+      static_cast<std::size_t>(frame.frameY) + frame.frameHeight > fullHeight_) {
+    throw std::runtime_error("SHP frame rectangle exceeds its canvas");
+  }
+  if (frame.dataOffset < 8 + frames_.size() * 24) {
+    throw std::runtime_error("SHP frame data overlaps the frame table");
+  }
+
   std::size_t inputOffset = frame.dataOffset;
-
-  auto writeOpaqueLine = [&](std::uint16_t y) {
+  // Compression occupies one byte; the remaining header bytes may be padding.
+  const auto frameType = frame.flags & 0xffU;
+  for (std::uint16_t y = 0; y < frame.frameHeight; ++y) {
     const std::size_t dst = static_cast<std::size_t>(frame.frameY + y) * fullWidth_ + frame.frameX;
-    const std::size_t count = frame.frameWidth;
-    if (inputOffset + count > bytes_.size()) {
-      throw std::runtime_error("SHP opaque frame overruns file");
-    }
-    std::copy_n(bytes_.data() + inputOffset, count, decoded.indices.begin() + dst);
-    inputOffset += count;
-    decoded.rowSpans[y] = DecodedFrame::RowSpan{
-      static_cast<std::uint16_t>(frame.frameY + y),
-      frame.frameX,
-      static_cast<std::uint16_t>(frame.frameX + frame.frameWidth - 1),
-      true,
-      {DecodedFrame::RowSegment{frame.frameX, static_cast<std::uint16_t>(frame.frameX + frame.frameWidth - 1)}}
-    };
-  };
-
-  auto writeTransparentLine = [&](std::uint16_t y, const bool useRle) {
-    if (inputOffset + 2 > bytes_.size()) {
-      throw std::runtime_error("SHP RLE line header overruns file");
-    }
-
-    const auto lineStart = inputOffset;
-    const auto compressedLength = readU16(bytes_, inputOffset);
-    inputOffset += 2;
-
-    if (compressedLength < 2 || lineStart + compressedLength > bytes_.size()) {
-      throw std::runtime_error("Invalid SHP RLE line length");
-    }
-
-    if (compressedLength == 4) {
+    if (frameType == kFrameTypeRaw0 || frameType == kFrameTypeRaw1) {
+      if (frame.frameWidth > bytes_.size() - inputOffset) {
+        throw std::runtime_error("SHP opaque frame overruns file");
+      }
+      std::copy_n(bytes_.data() + inputOffset, frame.frameWidth, decoded.indices.begin() + dst);
+      inputOffset += frame.frameWidth;
+    } else if (frameType == kFrameTypeRle3) {
+      if (bytes_.size() - inputOffset < 2) {
+        throw std::runtime_error("SHP RLE line header overruns file");
+      }
+      const auto length = readU16(bytes_, inputOffset);
+      if (length < 2 || length > bytes_.size() - inputOffset) {
+        throw std::runtime_error("Invalid SHP RLE line length");
+      }
+      const std::size_t lineEnd = inputOffset + length;
       inputOffset += 2;
-      decoded.rowSpans[y] = DecodedFrame::RowSpan{
-        static_cast<std::uint16_t>(frame.frameY + y),
-        frame.frameX,
-        frame.frameX,
-        false,
-        {}
-      };
-      return;
-    }
-
-    const std::size_t payloadLength = compressedLength - 2;
-    if (inputOffset + payloadLength > bytes_.size()) {
-      throw std::runtime_error("SHP RLE payload overruns file");
-    }
-
-    std::vector<std::uint8_t> payload(bytes_.begin() + static_cast<std::ptrdiff_t>(inputOffset),
-                                      bytes_.begin() + static_cast<std::ptrdiff_t>(inputOffset + payloadLength));
-    inputOffset += payloadLength;
-
-    std::size_t x = 0;
-    std::size_t payloadBegin = 0;
-    std::size_t payloadEnd = payload.size();
-
-    if (payload.size() >= 2 && payload.front() == 0) {
-      x = std::min<std::size_t>(payload[1], frame.frameWidth);
-      payloadBegin = 2;
-    }
-    if (payload.size() >= 2 && payload[payload.size() - 2] == 0) {
-      payloadEnd = payload.size() - 2;
-    }
-
-    const std::size_t dstLine = static_cast<std::size_t>(frame.frameY + y) * fullWidth_ + frame.frameX;
-    std::size_t firstOpaqueX = frame.frameWidth;
-    std::size_t lastOpaqueX = 0;
-    bool hasPixels = false;
-    bool segmentOpen = false;
-    std::size_t segmentStartX = 0;
-    std::vector<DecodedFrame::RowSegment> segments;
-
-    for (std::size_t i = payloadBegin; i < payloadEnd && x < frame.frameWidth; ++i) {
-      const auto value = payload[i];
-      if (useRle && value == 0 && i + 1 < payloadEnd && payload[i + 1] > 0) {
-        if (segmentOpen) {
-          segments.push_back(DecodedFrame::RowSegment{
-            static_cast<std::uint16_t>(frame.frameX + segmentStartX),
-            static_cast<std::uint16_t>(frame.frameX + x - 1)
-          });
-          segmentOpen = false;
+      std::size_t x = 0;
+      while (inputOffset < lineEnd) {
+        const auto value = bytes_[inputOffset++];
+        if (value == 0) {
+          if (inputOffset == lineEnd) {
+            throw std::runtime_error("Truncated SHP zero run");
+          }
+          const auto count = bytes_[inputOffset++];
+          if (count > frame.frameWidth - x && inputOffset != lineEnd) {
+            throw std::runtime_error("SHP zero run exceeds row width");
+          }
+          // Existing assets pad the final transparent run beyond odd row widths.
+          // It contains no visible pixels and must never write outside the row.
+          x += std::min<std::size_t>(count, frame.frameWidth - x);
+        } else {
+          if (x >= frame.frameWidth) {
+            throw std::runtime_error("SHP RLE pixels exceed row width");
+          }
+          decoded.indices[dst + x++] = value;
         }
-        x += std::min<std::size_t>(payload[i + 1], frame.frameWidth - x);
-        ++i;
+      }
+    } else {
+      throw std::runtime_error("Unsupported SHP frame type: " + std::to_string(frame.flags));
+    }
+
+    // Derive visible spans from pixels for both raw and compressed rows.
+    // In particular, a four-byte encoded row can contain two visible pixels.
+    auto& span = decoded.rowSpans[y];
+    span.y = static_cast<std::uint16_t>(frame.frameY + y);
+    span.startX = span.endX = frame.frameX;
+    std::size_t x = 0;
+    while (x < frame.frameWidth) {
+      if (decoded.indices[dst + x] == 0) {
+        ++x;
         continue;
       }
-
-      decoded.indices[dstLine + x] = value;
-      firstOpaqueX = std::min(firstOpaqueX, x);
-      lastOpaqueX = x;
-      hasPixels = true;
-      if (!segmentOpen) {
-        segmentStartX = x;
-        segmentOpen = true;
-      }
-      ++x;
-    }
-
-    if (segmentOpen) {
-      segments.push_back(DecodedFrame::RowSegment{
-        static_cast<std::uint16_t>(frame.frameX + segmentStartX),
-        static_cast<std::uint16_t>(frame.frameX + x - 1)
-      });
-    }
-
-    decoded.rowSpans[y] = DecodedFrame::RowSpan{
-      static_cast<std::uint16_t>(frame.frameY + y),
-      static_cast<std::uint16_t>(hasPixels ? frame.frameX + firstOpaqueX : frame.frameX),
-      static_cast<std::uint16_t>(hasPixels ? frame.frameX + lastOpaqueX : frame.frameX),
-      hasPixels,
-      std::move(segments)
-    };
-  };
-
-  for (std::uint16_t y = 0; y < frame.frameHeight; ++y) {
-    switch (frame.flags) {
-      case kFrameTypeRaw0:
-      case kFrameTypeRaw1:
-        writeOpaqueLine(y);
-        break;
-      case kFrameTypeRle3:
-        writeTransparentLine(y, true);
-        break;
-      default:
-        throw std::runtime_error("Unsupported SHP frame type: " + std::to_string(frame.flags));
+      const auto startX = static_cast<std::uint16_t>(frame.frameX + x);
+      while (x < frame.frameWidth && decoded.indices[dst + x] != 0) ++x;
+      const auto endX = static_cast<std::uint16_t>(frame.frameX + x - 1);
+      if (!span.hasPixels) span.startX = startX;
+      span.hasPixels = true;
+      span.endX = endX;
+      span.segments.push_back({startX, endX});
     }
   }
 

@@ -1,4 +1,5 @@
 #include "map_grid.h"
+#include "foundation.h"
 
 MapGrid::MapGrid(const int width, const int height)
   : width_(width), height_(height) {}
@@ -22,15 +23,7 @@ bool MapGrid::isBuildable(const TileCoord coord) const {
 }
 
 bool MapGrid::canPlace(const BuildingPlacement& placement) const {
-  for (int dy = 0; dy < placement.height; ++dy) {
-    for (int dx = 0; dx < placement.width; ++dx) {
-      if (!isBuildable(TileCoord{placement.topLeft.x + dx, placement.topLeft.y + dy})) {
-        return false;
-      }
-    }
-  }
-
-  return true;
+  return canPlace(foundationTiles(placement));
 }
 
 bool MapGrid::canPlace(const std::vector<TileCoord>& coords) const {
@@ -46,16 +39,22 @@ void MapGrid::setTerrainIndex(const TileCoord coord, const int terrainIndex) {
   cells_[key(coord)].terrainIndex = terrainIndex;
 }
 
+void MapGrid::setSurface(TileCoord coord, TerrainSurface surface) {
+  cells_[key(coord)].surface=std::move(surface);
+}
+int MapGrid::heightAt(std::int64_t x, std::int64_t y) const {
+  const auto nearest=[](std::int64_t n) { return static_cast<int>((n>=-500 ? n+500 : n-499)/1000); };
+  const TileCoord coord{nearest(x),nearest(y)};
+  const auto& s=cell(coord).surface;
+  return s.heightLeptons+static_cast<int>((s.slopeX*(x-coord.x*1000LL)+s.slopeY*(y-coord.y*1000LL))/1000);
+}
+
 void MapGrid::setBuildable(const TileCoord coord, const bool buildable) {
   cells_[key(coord)].buildable = buildable;
 }
 
 void MapGrid::setOccupied(const BuildingPlacement& placement, const bool occupied) {
-  for (int dy = 0; dy < placement.height; ++dy) {
-    for (int dx = 0; dx < placement.width; ++dx) {
-      cells_[key(TileCoord{placement.topLeft.x + dx, placement.topLeft.y + dy})].occupied = occupied;
-    }
-  }
+  setOccupied(foundationTiles(placement), occupied);
 }
 
 void MapGrid::setOccupied(const std::vector<TileCoord>& coords, const bool occupied) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "art_ini.h"
+#include "compat/rules_timing.h"
 #include "demo_style.h"
 #include "map_grid.h"
 #include "palette.h"
@@ -52,6 +53,13 @@ struct BuildingAsset {
     std::vector<UiTexture> textures;
     std::uint32_t frameDurationMs = 0;
     LayerRole role = LayerRole::Normal;
+    std::vector<std::size_t> sourceFrames{};
+    int gameFrameDelay = -1; // -1 keeps the legacy experiment clock; 0 freezes an animation.
+    bool normalized = false;
+    PixelOffset offset{}; // Screen pixels, relative to the common building draw center.
+    int zAdjust = 0;
+    int ySort = 0;
+    int normalZAdjust = 0;
   };
   std::vector<RenderLayer> completeLayers;
 
@@ -72,9 +80,51 @@ struct BuildingInstance {
   int hp = 1000;
   float turretHeadingRadians = 4.71238898038f;
   float turretTargetHeadingRadians = 4.71238898038f;
+  std::uint32_t stateDurationMs = 0;
+  bool layeredFactory = false;
+  bool productionSplit = false;
+  bool deferOverUnit = false;
+  std::uint64_t entityId = 0;
+  std::uint64_t exitingUnitId = 0;
+  bool factoryExitActive = false;
+  std::uint32_t factoryCycleStartTicks = 0;
+  ra2::GameFrame visualFrame = 0, animationStartedFrame = 0, factoryCycleStartedFrame = 0;
+  ra2::GameSpeed animationSpeed{}, productionAnimationSpeed{};
 };
 
+// Every building pass uses the same clock, including foreground redraws.
+// Production layers start a fresh loop for each simulation-owned exit cycle.
+[[nodiscard]] inline const UiTexture* buildingLayerTexture(const BuildingAsset::RenderLayer& layer,
+                                                          const BuildingInstance& instance,
+                                                          std::uint32_t nowTicks) {
+  if (layer.textures.empty()) return nullptr;
+  const bool production = layer.role == BuildingAsset::LayerRole::ProductionUnderUnit ||
+                          layer.role == BuildingAsset::LayerRole::ProductionOverUnit;
+  const bool factoryCycle = production && instance.factoryExitActive;
+  if (layer.gameFrameDelay >= 0) {
+    const auto speed = factoryCycle ? instance.productionAnimationSpeed : instance.animationSpeed;
+    const int delay = layer.normalized ? ra2::compat::normalizedAnimationDelay(layer.gameFrameDelay,speed) : layer.gameFrameDelay;
+    const auto startFrame = factoryCycle ? instance.factoryCycleStartedFrame : instance.animationStartedFrame;
+    const auto elapsed = instance.visualFrame >= startFrame ? instance.visualFrame-startFrame : 0;
+    return &layer.textures[delay > 0 ? (elapsed / delay) % layer.textures.size() : 0];
+  }
+  const auto start = factoryCycle ? instance.factoryCycleStartTicks : instance.stateStartTicks;
+  const auto duration = layer.frameDurationMs < 50 ? 50 : layer.frameDurationMs;
+  const auto index = layer.frameDurationMs > 0 ? ((nowTicks - start) / duration) % layer.textures.size() : 0;
+  return &layer.textures[index];
+}
+
 using BuildingAssetMap = std::unordered_map<std::string, BuildingAsset>;
+
+[[nodiscard]] inline std::size_t buildingBuildupFrameIndex(const BuildingInstance& instance,
+                                                          std::size_t count, std::uint32_t nowTicks) {
+  if (!count) return 0;
+  const auto elapsed = nowTicks - instance.stateStartTicks;
+  const auto index = instance.stateDurationMs > 0 ?
+    static_cast<std::uint64_t>(elapsed) * count / instance.stateDurationMs : elapsed / 50;
+  const auto bounded = index < count ? static_cast<std::size_t>(index) : count - 1;
+  return instance.state == BuildingState::Packing ? count - 1 - bounded : bounded;
+}
 
 // 加载 demo 当前支持的建筑资源。
 // 这里会把 art.ini、调色盘和 SHP 资源组装成主渲染层、工作层与建造动画。

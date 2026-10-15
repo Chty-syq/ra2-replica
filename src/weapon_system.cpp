@@ -1,6 +1,7 @@
 #include "weapon_system.h"
 
 #include "shp_ts.h"
+#include "config/definitions.h"
 
 #include <SDL_opengl.h>
 
@@ -14,6 +15,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <set>
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
@@ -107,7 +109,7 @@ struct FiringCellCandidate {
   std::sort(candidates.begin(),
             candidates.end(),
             [](const FiringCellCandidate& lhs, const FiringCellCandidate& rhs) {
-              if (std::fabs(lhs.moveDistance - rhs.moveDistance) > 0.001f) {
+              if (lhs.moveDistance != rhs.moveDistance) {
                 return lhs.moveDistance < rhs.moveDistance;
               }
               return lhs.targetDistance < rhs.targetDistance;
@@ -320,7 +322,7 @@ void spawnRhino120mmShot(RhinoUnitState& unit,
     0.0f,
     0.035f,
     0.14f,
-    0
+    0, {}, -1, 1.0f
   });
   projectiles.push_back(ProjectileInstance{
     muzzleLogical,
@@ -352,12 +354,30 @@ void spawnRhino120mmShot(RhinoUnitState& unit,
 }  // namespace
 
 WeaponVisualAssets loadWeaponVisualAssets(const std::filesystem::path& effectsRoot,
-                                          const Palette& animationPalette) {
+                                          const Palette& animationPalette,
+                                          const ra2::DefinitionRegistry* definitions) {
   WeaponVisualAssets assets;
   assets.shell120mm = loadIndexedShpFrame(effectsRoot / "projectiles" / "cannon" / "120mm.shp");
   assets.gunfireFrames = loadRgbaShpFrames(effectsRoot / "muzzle" / "gunfire.shp", animationPalette);
   assets.explosionFrames = loadRgbaShpFrames(effectsRoot / "explosions" / "s_clsn16.shp", animationPalette);
   assets.explosionLargeFrames = loadRgbaShpFrames(effectsRoot / "explosions" / "s_clsn22.shp", animationPalette);
+  if (definitions) {
+    std::set<std::string> wanted;
+    for (const auto& [id,type]:definitions->units()) {
+      (void)id;
+      if (type.primary.empty() || !definitions->rules().contains(type.primary)) continue;
+      const auto& weapon=definitions->weapon(type.primary);
+      if (!weapon.supported) continue;
+      if (!weapon.muzzleAnimation.empty()) wanted.insert(definitions->effectAnimation(weapon.muzzleAnimation).image);
+      for (const auto& name:definitions->warhead(weapon.warhead).animations) wanted.insert(definitions->effectAnimation(name).image);
+    }
+    for (const auto* name:{"GUNFIRE","S_CLSN16","S_CLSN22"}) wanted.erase(name);
+    for (const auto& file:std::filesystem::recursive_directory_iterator(effectsRoot)) {
+      const auto name=ra2::canonicalId(file.path().stem().string());
+      if (file.is_regular_file() && ra2::canonicalId(file.path().extension().string())==".SHP" && wanted.contains(name))
+        assets.animations.emplace(name,loadRgbaShpFrames(file.path(),animationPalette));
+    }
+  }
   return assets;
 }
 
@@ -366,6 +386,8 @@ void destroyWeaponVisualAssets(WeaponVisualAssets& assets) {
   destroyTextures(assets.gunfireFrames);
   destroyTextures(assets.explosionFrames);
   destroyTextures(assets.explosionLargeFrames);
+  for (auto& [name,frames]:assets.animations) { (void)name; destroyTextures(frames); }
+  assets.animations.clear();
 }
 
 bool issueRhinoGroundFireCommand(RhinoUnitState& unit,
@@ -458,6 +480,10 @@ void updateWeaponProjectilesAndEffects(std::vector<ProjectileInstance>& projecti
                                        const float deltaSeconds) {
   const float safeDeltaSeconds = std::max(0.0f, deltaSeconds);
 
+  for (auto& effect : effects) {
+    effect.elapsedSeconds += safeDeltaSeconds;
+  }
+
   std::vector<ProjectileInstance> liveProjectiles;
   liveProjectiles.reserve(projectiles.size());
   for (auto projectile : projectiles) {
@@ -470,10 +496,10 @@ void updateWeaponProjectilesAndEffects(std::vector<ProjectileInstance>& projecti
         CombatEffectKind::Explosion,
         projectile.targetLogical,
         0.0f,
-        0.0f,
+        projectile.elapsedSeconds - projectile.durationSeconds,
         0.045f,
         0.36f,
-        explosionVariant
+        explosionVariant, {}, -1, 1.0f
       });
       continue;
     }
@@ -481,9 +507,6 @@ void updateWeaponProjectilesAndEffects(std::vector<ProjectileInstance>& projecti
   }
   projectiles = std::move(liveProjectiles);
 
-  for (auto& effect : effects) {
-    effect.elapsedSeconds += safeDeltaSeconds;
-  }
   effects.erase(std::remove_if(effects.begin(),
                                effects.end(),
                                [](const CombatEffectInstance& effect) {
@@ -506,11 +529,12 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
                  std::max(0.001f, projectile.durationRulesFrames));
     const float progress =
       std::clamp(elapsedRulesFrames / std::max(0.001f, projectile.durationRulesFrames), 0.0f, 1.0f);
-    const Vec2 logical{
+    const Vec2 legacyLogical{
       projectile.startLogical.x + (projectile.targetLogical.x - projectile.startLogical.x) * progress,
       projectile.startLogical.y + (projectile.targetLogical.y - projectile.startLogical.y) * progress
     };
-    const float heightLeptons = std::max(
+    const Vec2 logical=projectile.simulated?projectile.logicalPosition:legacyLogical;
+    const float heightLeptons = projectile.simulated?projectile.heightLeptons:std::max(
       0.0f,
       projectile.startHeightLeptons +
         projectile.initialVerticalVelocityLeptonsPerFrame * elapsedRulesFrames -
@@ -522,7 +546,10 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
       isoToScreenFloat(projectile.startLogical.x, projectile.startLogical.y, origin, tileWidth, tileHeight);
     const auto targetScreen =
       isoToScreenFloat(projectile.targetLogical.x, projectile.targetLogical.y, origin, tileWidth, tileHeight);
-    const float screenAngle = std::atan2(targetScreen.y - startScreen.y, targetScreen.x - startScreen.x);
+    const auto velocityScreen=isoToScreenFloat(projectile.velocityLogical.x,projectile.velocityLogical.y,{},tileWidth,tileHeight);
+    const float screenAngle = projectile.simulated?
+      std::atan2(velocityScreen.y-leptonHeightToPixels(projectile.verticalVelocityLeptons,tileHeight),velocityScreen.x):
+      std::atan2(targetScreen.y-startScreen.y,targetScreen.x-startScreen.x);
     const float width = std::max(6.0f, static_cast<float>(assets.shell120mm.width));
     const float height = std::max(3.0f, static_cast<float>(assets.shell120mm.height));
     const float depth = std::clamp(depthFromLogicalCenter(logical, tileWidth, tileHeight) - 0.00045f,
@@ -532,17 +559,21 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
   }
 
   for (const auto& effect : effects) {
-    const auto& frames =
-      effect.kind == CombatEffectKind::Muzzle
+    const auto extra=assets.animations.find(effect.animation);
+    if (!effect.animation.empty() && effect.animation!="GUNFIRE" && effect.animation!="S_CLSN16" && effect.animation!="S_CLSN22" && extra==assets.animations.end()) continue;
+    const auto& frames = extra!=assets.animations.end()?extra->second:
+      effect.animation=="GUNFIRE" || (effect.animation.empty() && effect.kind == CombatEffectKind::Muzzle)
         ? assets.gunfireFrames
-        : ((effect.variant == 1 && !assets.explosionLargeFrames.empty())
+        : (((effect.animation=="S_CLSN22" || effect.variant==1) && !assets.explosionLargeFrames.empty())
              ? assets.explosionLargeFrames
              : assets.explosionFrames);
     if (frames.empty()) {
       continue;
     }
 
-    const UiTexture& frame = frames[effectFrameIndex(effect, frames.size())];
+    const auto index=effect.animationFrame>=0?static_cast<std::size_t>(effect.animationFrame):effectFrameIndex(effect,frames.size());
+    if (index>=frames.size()) continue;
+    const UiTexture& frame = frames[index];
     Vec2 screen =
       isoToScreenFloat(effect.logicalPosition.x, effect.logicalPosition.y, origin, tileWidth, tileHeight);
     screen.y -= leptonHeightToPixels(effect.heightLeptons, tileHeight);
@@ -556,6 +587,7 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
                      static_cast<float>(frame.width),
                      static_cast<float>(frame.height),
                      0.0f,
-                     depth);
+                     depth,
+                     effect.alpha);
   }
 }

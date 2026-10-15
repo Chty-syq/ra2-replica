@@ -1,6 +1,6 @@
 #include "rhino_unit.h"
 
-#include "demo_app_support.h"
+#include "pathfinding.h"
 #include "shp_ts.h"
 #include "voxel_unit.h"
 #include "vpl_box_renderer.h"
@@ -8,17 +8,10 @@
 #include <SDL_opengl.h>
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
-#include <limits>
-#include <optional>
-#include <queue>
-#include <stdexcept>
-#include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -28,24 +21,7 @@ constexpr float kHealthBarOffsetY = 30.0f;
 constexpr float kMoveSpeedTilesPerSecond = 2.4f;
 constexpr float kTurnSpeedRadiansPerSecond = 5.2f;
 constexpr float kMoveTurnThresholdRadians = 0.22f;
-constexpr std::size_t kPathSearchRadius = 10;
 constexpr float kPi = 3.14159265358979323846f;
-
-struct PathNode {
-  TileCoord coord{};
-  float priority = 0.0f;
-};
-
-struct PathNodeGreater {
-  bool operator()(const PathNode& lhs, const PathNode& rhs) const noexcept {
-    return lhs.priority > rhs.priority;
-  }
-};
-
-[[nodiscard]] std::uint64_t tileKey(const TileCoord coord) {
-  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.x)) << 32) |
-         static_cast<std::uint32_t>(coord.y);
-}
 
 [[nodiscard]] UiTexture uploadTexture(const int width,
                                       const int height,
@@ -61,7 +37,8 @@ struct PathNodeGreater {
   return UiTexture{texture, 0, width, height, rgba};
 }
 
-[[nodiscard]] UiTexture cropOpaqueBounds(const UiTexture& source) {
+// Takes ownership of the uploaded source, including when no crop is needed.
+[[nodiscard]] UiTexture cropOpaqueBounds(UiTexture source) {
   if (source.texture == 0 || source.width <= 0 || source.height <= 0 || source.rgba.empty()) {
     return source;
   }
@@ -105,19 +82,14 @@ struct PathNodeGreater {
     }
   }
 
-  return uploadTexture(croppedWidth, croppedHeight, rgba);
-}
-
-[[nodiscard]] std::vector<UiTexture> loadAllShpFrames(const std::filesystem::path& path,
-                                                      const Palette& palette) {
-  const auto shp = ShpTsFile::load(path);
-  std::vector<UiTexture> textures;
-  textures.reserve(shp.frameCount());
-  for (std::size_t frameIndex = 0; frameIndex < shp.frameCount(); ++frameIndex) {
-    const auto frame = shp.decodeFrame(frameIndex);
-    textures.push_back(uploadTexture(frame.width, frame.height, shp.decodeFrameRgba(frameIndex, palette)));
+  try {
+    auto cropped = uploadTexture(croppedWidth, croppedHeight, rgba);
+    glDeleteTextures(1, &source.texture);
+    return cropped;
+  } catch (...) {
+    glDeleteTextures(1, &source.texture);
+    throw;
   }
-  return textures;
 }
 
 [[nodiscard]] UiTexture loadSingleShpFrame(const std::filesystem::path& path,
@@ -136,13 +108,6 @@ void destroyTexture(UiTexture& texture) {
   texture.width = 0;
   texture.height = 0;
   texture.rgba.clear();
-}
-
-void destroyTextures(std::vector<UiTexture>& textures) {
-  for (auto& texture : textures) {
-    destroyTexture(texture);
-  }
-  textures.clear();
 }
 
 [[nodiscard]] Vec2 isoToScreenFloat(const float tileX,
@@ -174,152 +139,17 @@ void destroyTextures(std::vector<UiTexture>& textures) {
   return normalizeAngle(current + std::copysign(maxStep, delta));
 }
 
-[[nodiscard]] float octileDistance(const TileCoord from, const TileCoord to) {
-  const float dx = static_cast<float>(std::abs(from.x - to.x));
-  const float dy = static_cast<float>(std::abs(from.y - to.y));
-  return std::max(dx, dy) + 0.41421356237f * std::min(dx, dy);
-}
-
 [[nodiscard]] bool isSameCoord(const TileCoord lhs, const TileCoord rhs) {
   return lhs.x == rhs.x && lhs.y == rhs.y;
-}
-
-[[nodiscard]] bool canWalkOn(const MapGrid& map,
-                             const TileCoord coord,
-                             const TileCoord start,
-                             const TileCoord goal) {
-  return isSameCoord(coord, start) || isSameCoord(coord, goal) || map.isBuildable(coord);
-}
-
-[[nodiscard]] std::optional<TileCoord> findNearestReachableTarget(const MapGrid& map,
-                                                                  const TileCoord start,
-                                                                  const TileCoord requested) {
-  if (canWalkOn(map, requested, start, requested)) {
-    return requested;
-  }
-
-  std::optional<TileCoord> best;
-  float bestDistance = std::numeric_limits<float>::infinity();
-  for (int radius = 1; radius <= static_cast<int>(kPathSearchRadius); ++radius) {
-    for (int dy = -radius; dy <= radius; ++dy) {
-      for (int dx = -radius; dx <= radius; ++dx) {
-        if (std::max(std::abs(dx), std::abs(dy)) != radius) {
-          continue;
-        }
-
-        const TileCoord candidate{requested.x + dx, requested.y + dy};
-        if (!map.isBuildable(candidate)) {
-          continue;
-        }
-
-        const float distance = octileDistance(candidate, requested);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          best = candidate;
-        }
-      }
-    }
-
-    if (best.has_value()) {
-      return best;
-    }
-  }
-
-  return std::nullopt;
-}
-
-[[nodiscard]] std::vector<TileCoord> buildPath(const std::unordered_map<std::uint64_t, TileCoord>& cameFrom,
-                                               const TileCoord start,
-                                               const TileCoord goal) {
-  std::vector<TileCoord> reversed;
-  TileCoord current = goal;
-  reversed.push_back(current);
-  while (!isSameCoord(current, start)) {
-    const auto it = cameFrom.find(tileKey(current));
-    if (it == cameFrom.end()) {
-      return {};
-    }
-    current = it->second;
-    reversed.push_back(current);
-  }
-
-  std::reverse(reversed.begin(), reversed.end());
-  if (!reversed.empty() && isSameCoord(reversed.front(), start)) {
-    reversed.erase(reversed.begin());
-  }
-  return reversed;
-}
-
-[[nodiscard]] std::vector<TileCoord> findPath(const MapGrid& map,
-                                              const TileCoord start,
-                                              const TileCoord goal) {
-  if (isSameCoord(start, goal)) {
-    return {};
-  }
-
-  // A* 使用真正的 8 邻接：斜向格与上下左右一样都是直接相邻格。
-  // 斜走只要求目标格本身可通行，避免坦克在空闲对角格前绕路。
-  static constexpr std::array<TileCoord, 8> kNeighbors{{
-    {1, 0}, {-1, 0}, {0, 1}, {0, -1},
-    {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
-  }};
-
-  std::priority_queue<PathNode, std::vector<PathNode>, PathNodeGreater> frontier;
-  std::unordered_map<std::uint64_t, float> costSoFar;
-  std::unordered_map<std::uint64_t, TileCoord> cameFrom;
-
-  frontier.push(PathNode{start, 0.0f});
-  costSoFar.emplace(tileKey(start), 0.0f);
-
-  while (!frontier.empty()) {
-    const TileCoord current = frontier.top().coord;
-    frontier.pop();
-
-    if (isSameCoord(current, goal)) {
-      return buildPath(cameFrom, start, goal);
-    }
-
-    const float currentCost = costSoFar[tileKey(current)];
-    for (const auto offset : kNeighbors) {
-      const TileCoord next{current.x + offset.x, current.y + offset.y};
-      const bool diagonal = offset.x != 0 && offset.y != 0;
-      if (!canWalkOn(map, next, start, goal)) {
-        continue;
-      }
-
-      const float moveCost = diagonal ? 1.41421356237f : 1.0f;
-      const float nextCost = currentCost + moveCost;
-      const auto nextKey = tileKey(next);
-      const auto existing = costSoFar.find(nextKey);
-      if (existing != costSoFar.end() && nextCost >= existing->second) {
-        continue;
-      }
-
-      costSoFar[nextKey] = nextCost;
-      cameFrom[nextKey] = current;
-      frontier.push(PathNode{next, nextCost + octileDistance(next, goal)});
-    }
-  }
-
-  return {};
 }
 
 [[nodiscard]] bool planRhinoMoveFromCurrentCell(RhinoUnitState& unit,
                                                 const MapGrid& map,
                                                 const TileCoord targetCell) {
-  const TileCoord start = unit.occupiedCell;
-  const auto resolvedTarget = findNearestReachableTarget(map, start, targetCell);
-  if (!resolvedTarget.has_value()) {
-    return false;
-  }
-
-  auto path = findPath(map, start, *resolvedTarget);
-  if (path.empty() && !isSameCoord(start, *resolvedTarget)) {
-    return false;
-  }
-
-  unit.moveTarget = *resolvedTarget;
-  unit.path = std::move(path);
+  auto path = findTilePath(map, unit.occupiedCell, targetCell);
+  if (!path) return false;
+  unit.moveTarget = path->target;
+  unit.path = std::move(path->cells);
   unit.steeringTarget = unit.occupiedCell;
   unit.steeringDirectionIndex = 0;
   return true;
@@ -380,21 +210,6 @@ void applyPendingMoveAfterWaypoint(RhinoUnitState& unit, MapGrid& map) {
   return 0;
 }
 
-[[nodiscard]] int desiredDirectionIndexForMovement(const TileCoord delta) {
-  const int stepX = (delta.x > 0) ? 1 : ((delta.x < 0) ? -1 : 0);
-  const int stepY = (delta.y > 0) ? 1 : ((delta.y < 0) ? -1 : 0);
-
-  if (stepX > 0 && stepY == 0) return 0;
-  if (stepX > 0 && stepY > 0) return 4;
-  if (stepX == 0 && stepY > 0) return 8;
-  if (stepX < 0 && stepY > 0) return 12;
-  if (stepX < 0 && stepY == 0) return 16;
-  if (stepX < 0 && stepY < 0) return 20;
-  if (stepX == 0 && stepY < 0) return 24;
-  if (stepX > 0 && stepY < 0) return 28;
-  return 0;
-}
-
 [[nodiscard]] float directionIndexToHeadingRadians(const int directionIndex) {
   const int normalizedIndex = ((directionIndex % 32) + 32) % 32;
   return static_cast<float>(normalizedIndex) * 2.0f * kPi / 32.0f;
@@ -423,10 +238,6 @@ void drawTexturedQuad(Renderer2D& renderer,
   renderer.draw(GL_TRIANGLES, texture, vertices, std::size(vertices));
 }
 
-[[nodiscard]] float worldDepthFromAnchor(const Vec2 anchor) {
-  const float basis = anchor.y + anchor.x * 0.001f;
-  return std::clamp(0.5f - basis / 16384.0f, 0.001f, 0.999f);
-}
 }  // namespace
 
 RhinoUnitUiAssets loadRhinoUnitUiAssets(const std::filesystem::path& overlayRoot,
@@ -486,87 +297,29 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, const float deltaSecond
     return;
   }
 
-  const TileCoord targetCellModern = unit.path.front();
-  const Vec2 toTargetModern{
-    static_cast<float>(targetCellModern.x) - unit.tilePosition.x,
-    static_cast<float>(targetCellModern.y) - unit.tilePosition.y
-  };
-  const float distanceModern =
-    std::sqrt(toTargetModern.x * toTargetModern.x + toTargetModern.y * toTargetModern.y);
-  if (distanceModern <= 0.001f) {
-    map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, false);
-    unit.occupiedCell = targetCellModern;
-    map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, true);
-    unit.tilePosition = Vec2{static_cast<float>(targetCellModern.x), static_cast<float>(targetCellModern.y)};
-    unit.path.erase(unit.path.begin());
-    applyPendingMoveAfterWaypoint(unit, map);
-    return;
-  }
-
-  if (!isSameCoord(unit.steeringTarget, targetCellModern)) {
-    unit.steeringTarget = targetCellModern;
-    unit.steeringDirectionIndex = desiredDirectionIndexForMovement(toTargetModern);
-  }
-
-  const int desiredDirectionIndexModern = unit.steeringDirectionIndex;
-  const float desiredHeadingModern = directionIndexToHeadingRadians(desiredDirectionIndexModern);
-  unit.headingRadians = rotateToward(unit.headingRadians,
-                                     desiredHeadingModern,
-                                     kTurnSpeedRadiansPerSecond * deltaSeconds);
-
-  if (std::fabs(normalizeAngle(desiredHeadingModern - unit.headingRadians)) > kMoveTurnThresholdRadians) {
-    return;
-  }
-
-  const Vec2 forwardModern = headingDirection(unit.headingRadians);
-  const float alongForwardModern =
-    toTargetModern.x * forwardModern.x + toTargetModern.y * forwardModern.y;
-  if (alongForwardModern <= 0.0f) {
-    return;
-  }
-
-  const float maxStepModern = kMoveSpeedTilesPerSecond * deltaSeconds;
-  const float stepModern = std::min(maxStepModern, alongForwardModern);
-  unit.tilePosition.x += forwardModern.x * stepModern;
-  unit.tilePosition.y += forwardModern.y * stepModern;
-
-  const Vec2 remainingToTargetModern{
-    static_cast<float>(targetCellModern.x) - unit.tilePosition.x,
-    static_cast<float>(targetCellModern.y) - unit.tilePosition.y
-  };
-  const float remainingDistanceModern =
-    std::sqrt(remainingToTargetModern.x * remainingToTargetModern.x +
-              remainingToTargetModern.y * remainingToTargetModern.y);
-  if (remainingDistanceModern <= 0.08f || stepModern + 0.001f >= distanceModern) {
-    map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, false);
-    unit.occupiedCell = targetCellModern;
-    map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, true);
-    unit.tilePosition = Vec2{static_cast<float>(targetCellModern.x), static_cast<float>(targetCellModern.y)};
-    unit.path.erase(unit.path.begin());
-    applyPendingMoveAfterWaypoint(unit, map);
-  }
-  return;
-
-  // 更新顺序刻意分成两段：
-  // 1. 先朝目标格转向
-  // 2. 车头基本对准后再推进
-  // 这样移动观感会比“瞬间换朝向直接平移”更像 RTS 载具。
   const TileCoord targetCell = unit.path.front();
   const Vec2 toTarget{
     static_cast<float>(targetCell.x) - unit.tilePosition.x,
     static_cast<float>(targetCell.y) - unit.tilePosition.y
   };
-  const float distance = std::sqrt(toTarget.x * toTarget.x + toTarget.y * toTarget.y);
+  const float distance =
+    std::sqrt(toTarget.x * toTarget.x + toTarget.y * toTarget.y);
   if (distance <= 0.001f) {
     map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, false);
     unit.occupiedCell = targetCell;
     map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, true);
     unit.tilePosition = Vec2{static_cast<float>(targetCell.x), static_cast<float>(targetCell.y)};
     unit.path.erase(unit.path.begin());
+    applyPendingMoveAfterWaypoint(unit, map);
     return;
   }
 
-  const int desiredDirectionIndex = desiredDirectionIndexForMovement(toTarget);
+  if (!isSameCoord(unit.steeringTarget, targetCell)) {
+    unit.steeringTarget = targetCell;
+    unit.steeringDirectionIndex = desiredDirectionIndexForMovement(toTarget);
+  }
+
+  const int desiredDirectionIndex = unit.steeringDirectionIndex;
   const float desiredHeading = directionIndexToHeadingRadians(desiredDirectionIndex);
   unit.headingRadians = rotateToward(unit.headingRadians,
                                      desiredHeading,
@@ -576,16 +329,32 @@ void updateRhinoUnit(RhinoUnitState& unit, MapGrid& map, const float deltaSecond
     return;
   }
 
-  const float step = std::min(distance, kMoveSpeedTilesPerSecond * deltaSeconds);
-  unit.tilePosition.x += (toTarget.x / distance) * step;
-  unit.tilePosition.y += (toTarget.y / distance) * step;
+  const Vec2 forward = headingDirection(unit.headingRadians);
+  const float alongForward =
+    toTarget.x * forward.x + toTarget.y * forward.y;
+  if (alongForward <= 0.0f) {
+    return;
+  }
 
-  if (step + 0.001f >= distance) {
+  const float maxStep = kMoveSpeedTilesPerSecond * deltaSeconds;
+  const float step = std::min(maxStep, alongForward);
+  unit.tilePosition.x += forward.x * step;
+  unit.tilePosition.y += forward.y * step;
+
+  const Vec2 remainingToTarget{
+    static_cast<float>(targetCell.x) - unit.tilePosition.x,
+    static_cast<float>(targetCell.y) - unit.tilePosition.y
+  };
+  const float remainingDistance =
+    std::sqrt(remainingToTarget.x * remainingToTarget.x +
+              remainingToTarget.y * remainingToTarget.y);
+  if (remainingDistance <= 0.08f || step + 0.001f >= distance) {
     map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, false);
     unit.occupiedCell = targetCell;
     map.setOccupied(std::vector<TileCoord>{unit.occupiedCell}, true);
     unit.tilePosition = Vec2{static_cast<float>(targetCell.x), static_cast<float>(targetCell.y)};
     unit.path.erase(unit.path.begin());
+    applyPendingMoveAfterWaypoint(unit, map);
   }
 }
 
@@ -726,9 +495,10 @@ void drawRhinoUnit(Renderer2D& renderer,
                    const std::uint32_t nowTicks,
                    const VplBoxRendererState& renderState) {
   (void)nowTicks;
+  const Vec2 elevatedOrigin{origin.x,origin.y-unit.heightLeptons*tileHeight/256.0f};
   drawDirectVoxelUnitInstance(rhinoRenderer,
                               unit.tilePosition,
-                              origin,
+                              elevatedOrigin,
                               tileWidth,
                               tileHeight,
                               footprintK,
@@ -736,5 +506,5 @@ void drawRhinoUnit(Renderer2D& renderer,
                               viewportHeight,
                               renderState);
   renderer.beginUiPass();
-  drawRhinoHealthBar(renderer, uiAssets, unit, origin, tileWidth, tileHeight);
+  drawRhinoHealthBar(renderer, uiAssets, unit, elevatedOrigin, tileWidth, tileHeight);
 }

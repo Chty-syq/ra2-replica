@@ -1,4 +1,5 @@
 #include "iso_world.h"
+#include "foundation.h"
 
 #include <algorithm>
 #include <array>
@@ -7,7 +8,7 @@
 
 namespace {
 [[nodiscard]] bool defersOverUnitLayersUntilAfterUnits(const BuildingAsset& asset) {
-  return asset.id == "GAWEAP";
+  return asset.art.deferOverUnit;
 }
 
 [[nodiscard]] bool isUnderUnitLayer(const BuildingAsset::LayerRole role) {
@@ -20,106 +21,12 @@ namespace {
          role == BuildingAsset::LayerRole::ProductionOverUnit;
 }
 
-// 用于表达“相对锚点格”的辅助偏移函数。
-TileCoord offsetTile(const TileCoord anchor, const int dx, const int dy) {
-  return TileCoord{anchor.x + dx, anchor.y + dy};
-}
-
-// 复现参考项目里使用的 footprint 形状。
-// 虽然 art.ini 保存的是矩形宽高，但在等距视角下，
-// 若干大建筑的可见/可放置区域实际上会按“菱形簇”来处理。
-std::vector<TileCoord> foundationTilesFromAxes(const TileCoord anchor, const int fxNum, const int fyNum) {
-  std::vector<TileCoord> coords;
-  auto push = [&](const int dx, const int dy) {
-    coords.push_back(offsetTile(anchor, dx, dy));
-  };
-
-  if (fxNum == 1 && fyNum == 1) {
-    push(0, 0);
-  } else if (fxNum == 2 && fyNum == 2) {
-    push(0, 0);
-    push(0, 1);
-    push(1, 1);
-    push(1, 0);
-  } else if (fxNum == 2 && fyNum == 3) {
-    push(0, 0);
-    push(-1, 0);
-    push(-1, 1);
-    push(0, 1);
-    push(1, 1);
-    push(1, 0);
-  } else if (fxNum == 3 && fyNum == 3) {
-    push(0, 0);
-    push(-1, 1);
-    push(0, 1);
-    push(1, 1);
-    push(1, 0);
-    push(1, -1);
-    push(0, -1);
-    push(-1, -1);
-    push(-1, 0);
-  } else if (fxNum == 3 && fyNum == 4) {
-    push(0, 0);
-    push(-1, 1);
-    push(0, 1);
-    push(1, 1);
-    push(1, 0);
-    push(1, -1);
-    push(0, -1);
-    push(-1, -1);
-    push(-1, 0);
-    push(2, -1);
-    push(2, 0);
-    push(2, 1);
-  } else if (fxNum == 4 && fyNum == 4) {
-    push(0, 0);
-    push(-1, 1);
-    push(0, 1);
-    push(1, 1);
-    push(1, 0);
-    push(1, -1);
-    push(0, -1);
-    push(-1, -1);
-    push(-1, 0);
-    push(-1, 2);
-    push(0, 2);
-    push(1, 2);
-    push(2, -1);
-    push(2, 0);
-    push(2, 1);
-    push(2, 2);
-  } else if (fxNum == 3 && fyNum == 5) {
-    push(0, 0);
-    push(-1, 1);
-    push(0, 1);
-    push(1, 1);
-    push(1, 0);
-    push(1, -1);
-    push(0, -1);
-    push(-1, -1);
-    push(-1, 0);
-    push(-2, 1);
-    push(-2, 0);
-    push(-2, -1);
-    push(2, -1);
-    push(2, 0);
-    push(2, 1);
-  } else {
-    for (int dy = 0; dy < fyNum; ++dy) {
-      for (int dx = 0; dx < fxNum; ++dx) {
-        push(dx, dy);
-      }
-    }
-  }
-
-  return coords;
-}
 
 // 用占地格中心来表达“这个对象在地图逻辑平面里的位置”。
 // 对建筑来说，这个中心点来自所有占地格中心的平均值；
 // 对 1x1 载具来说，直接就是它当前所在的逻辑坐标。
 Vec2 logicalCenterForPlacement(const BuildingPlacement& placement) {
-  const auto coords = foundationTilesFromAxes(placement.topLeft, placement.height, placement.width);
+  const auto coords = foundationTiles(placement);
   if (coords.empty()) {
     return Vec2{
       static_cast<float>(placement.topLeft.x),
@@ -155,45 +62,6 @@ float foundationContactSpan(const BuildingPlacement& placement, const float tile
   }
 
   return std::max(tileWidth * 0.5f, maxScreenX - minScreenX);
-}
-
-Vec2 foundationTopCenter(const BuildingPlacement& placement,
-                         const Vec2 origin,
-                         const float tileWidth,
-                         const float tileHeight) {
-  return isoToScreen(placement.topLeft.x, placement.topLeft.y, origin, tileWidth, tileHeight);
-}
-
-// 原版/参考项目的对齐规则并不是单纯依赖 sprite 包围盒，
-// 而是先按 footprint 类别分组，再给一套经验偏移。
-// 这些偏移就是 SHP 图像空间和地图格空间之间的实际桥梁。
-Vec2 spriteAnchorInFrameImpl(const DecodedFrame& frame, const FoundationSize& foundation) {
-  float anchorX = frame.width * 0.5f;
-  float anchorY = frame.height * 0.5f;
-
-  // 参考项目按 footprint 形状做对齐，而不是按图片实际边界做自动推导。
-  const int fxNum = foundation.height;
-  const int fyNum = foundation.width;
-
-  if (fxNum == 2 && fyNum == 2) {
-    anchorY += 14.0f;
-  } else if (fxNum == 1 && fyNum == 1) {
-    anchorY += 14.0f;
-  } else if (fxNum == 2 && fyNum == 3) {
-    anchorX += 30.0f;
-    anchorY += 29.0f;
-  } else if (fxNum == 3 && fyNum == 3) {
-    anchorY += 44.0f;
-  } else if (fxNum == 4 && fyNum == 4) {
-    anchorY += 44.0f;
-  } else if (fxNum == 3 && fyNum == 4) {
-    anchorY += 44.0f;
-  } else if (fxNum == 3 && fyNum == 5) {
-    anchorX += 30.0f;
-    anchorY += 59.0f;
-  }
-
-  return Vec2{anchorX, anchorY};
 }
 
 [[nodiscard]] std::array<RenderVertex, 6> makeQuadVertices(const Vec2 topLeft,
@@ -295,8 +163,33 @@ void drawLine(Renderer2D& renderer,
 }
 }  // 匿名命名空间
 
-Vec2 spriteAnchorInFrame(const DecodedFrame& frame, const FoundationSize& foundation) {
-  return spriteAnchorInFrameImpl(frame, foundation);
+Vec2 spriteAnchorInFrame(const DecodedFrame& frame) {
+  return {static_cast<float>(frame.width / 2), static_cast<float>(frame.height / 2)};
+}
+
+Vec2 buildingDrawCenter(const BuildingPlacement& placement, const Vec2 origin,
+                        const float tileWidth, const float tileHeight) {
+  auto center = isoToScreen(placement.topLeft.x, placement.topLeft.y, origin, tileWidth, tileHeight);
+  center.y -= tileHeight * 0.5f;
+  return center;
+}
+
+Vec2 buildingSpriteTopLeft(const Vec2 drawCenter, const int canvasWidth, const int canvasHeight, const PixelOffset offset) {
+  return {drawCenter.x - canvasWidth / 2 + offset.x, drawCenter.y - canvasHeight / 2 + offset.y};
+}
+
+LogicalDepthParams buildingLogicalDepth(const BuildingPlacement& placement, const float tileWidth, const float tileHeight) {
+  // The drawing origin is the starting cell's upper vertex, i.e. (-0.5,-0.5)
+  // relative to its center. Footprint offsets must use that same origin.
+  LogicalDepthParams depth{static_cast<float>(placement.topLeft.x) - 0.5f,
+                           static_cast<float>(placement.topLeft.y) - 0.5f, tileWidth, tileHeight};
+  const auto cells = foundationTiles(placement);
+  depth.footprintCount = std::min<int>(static_cast<int>(cells.size()), LogicalDepthParams::kMaxFootprintTiles);
+  for (int i = 0; i < depth.footprintCount; ++i) {
+    depth.footprintOffsets[i * 2] = static_cast<float>(cells[i].x - placement.topLeft.x) + 0.5f;
+    depth.footprintOffsets[i * 2 + 1] = static_cast<float>(cells[i].y - placement.topLeft.y) + 0.5f;
+  }
+  return depth;
 }
 
 Vec2 isoToScreen(const int tileX, const int tileY, const Vec2 origin, const float tileWidth, const float tileHeight) {
@@ -316,10 +209,6 @@ TileCoord screenToIso(const float screenX, const float screenY, const Vec2 origi
 
 BuildingPlacement placementFromAnchor(const TileCoord& anchor, const FoundationSize& foundation) {
   return BuildingPlacement{anchor, foundation.width, foundation.height};
-}
-
-std::vector<TileCoord> foundationTiles(const BuildingPlacement& placement) {
-  return foundationTilesFromAxes(placement.topLeft, placement.height, placement.width);
 }
 
 BuildingRenderCommand makeBuildingRenderCommand(const BuildingAsset& asset,
@@ -391,24 +280,17 @@ void drawBuildingInstance(Renderer2D& renderer,
   // - 完成态：使用第一层完成态帧
   // 真正绘制完成态时，再把 completeLayers 逐层叠上去。
   const UiTexture* texture = &asset.completeTexture;
-  const DecodedFrame* frame = &asset.completeFrame;
 
   if ((instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing) &&
       !asset.buildupTextures.empty()) {
-    constexpr std::uint32_t kBuildupFrameDurationMs = 50;
-    const std::size_t elapsedFrame = std::min<std::size_t>(
-      (nowTicks - instance.stateStartTicks) / kBuildupFrameDurationMs,
-      asset.buildupTextures.size() - 1);
-    const std::size_t frameIndex = instance.state == BuildingState::Packing
-                                     ? asset.buildupTextures.size() - 1 - elapsedFrame
-                                     : elapsedFrame;
+    const auto frameIndex = buildingBuildupFrameIndex(instance, asset.buildupTextures.size(), nowTicks);
     texture = &asset.buildupTextures[frameIndex];
-    frame = &asset.buildupFrames[frameIndex];
   }
 
-  const auto foundationAnchor = foundationTopCenter(instance.placement, origin, tileWidth, tileHeight);
-  const auto anchor = spriteAnchorInFrame(*frame, asset.foundation);
-  const Vec2 spriteTopLeft{foundationAnchor.x - anchor.x, foundationAnchor.y - anchor.y};
+  const auto foundationAnchor = buildingDrawCenter(instance.placement, origin, tileWidth, tileHeight);
+  const bool buildup = instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing;
+  const auto offset = !buildup && !asset.completeLayers.empty() ? asset.completeLayers.front().offset : PixelOffset{};
+  const auto spriteTopLeft = buildingSpriteTopLeft(foundationAnchor, texture->width, texture->height, offset);
   const Vec2 spriteTopRight{spriteTopLeft.x + texture->width, spriteTopLeft.y};
   const Vec2 spriteBottomRight{spriteTopLeft.x + texture->width, spriteTopLeft.y + texture->height};
   const Vec2 spriteBottomLeft{spriteTopLeft.x, spriteTopLeft.y + texture->height};
@@ -418,10 +300,14 @@ void drawBuildingInstance(Renderer2D& renderer,
   // Flat=yes 的维修厂/地台类建筑已经包含贴地接触阴影，跳过额外投影。
   if (!asset.art.flat) {
     const float foundationScreenWidth = foundationContactSpan(instance.placement, tileWidth);
-    const Vec2 shadowTopLeft{foundationAnchor.x - foundationScreenWidth * 0.48f, foundationAnchor.y - tileHeight * 0.10f};
-    const Vec2 shadowTopRight{foundationAnchor.x + foundationScreenWidth * 0.32f, foundationAnchor.y - tileHeight * 0.22f};
-    const Vec2 shadowBottomRight{foundationAnchor.x + foundationScreenWidth * 0.58f, foundationAnchor.y + tileHeight * 0.12f};
-    const Vec2 shadowBottomLeft{foundationAnchor.x - foundationScreenWidth * 0.22f, foundationAnchor.y + tileHeight * 0.20f};
+    // The ground shadow belongs to the footprint center, not the SHP draw origin.
+    const auto ground = logicalCenterForPlacement(instance.placement);
+    const Vec2 shadowCenter{origin.x + (ground.x - ground.y) * tileWidth * 0.5f,
+                            origin.y + (ground.x + ground.y) * tileHeight * 0.5f};
+    const Vec2 shadowTopLeft{shadowCenter.x - foundationScreenWidth * 0.48f, shadowCenter.y - tileHeight * 0.10f};
+    const Vec2 shadowTopRight{shadowCenter.x + foundationScreenWidth * 0.32f, shadowCenter.y - tileHeight * 0.22f};
+    const Vec2 shadowBottomRight{shadowCenter.x + foundationScreenWidth * 0.58f, shadowCenter.y + tileHeight * 0.12f};
+    const Vec2 shadowBottomLeft{shadowCenter.x - foundationScreenWidth * 0.22f, shadowCenter.y + tileHeight * 0.20f};
 
   // 建筑本体现在已经是“按像素写深度”了，但阴影仍然是简化投影。
   // 如果让阴影也把统一深度写进 depth buffer，就可能在某些建筑像素上抢到
@@ -444,38 +330,10 @@ void drawBuildingInstance(Renderer2D& renderer,
                      std::min(0.999f, depth01 + 0.0005f));
     glDepthMask(GL_TRUE);
   }
-  const LogicalDepthParams logicalDepth{
-    static_cast<float>(instance.placement.topLeft.x),
-    static_cast<float>(instance.placement.topLeft.y),
-    tileWidth,
-    tileHeight
-  };
-  const auto footprintCoords = foundationTiles(instance.placement);
-  LogicalDepthParams logicalDepthWithFootprint = logicalDepth;
-  logicalDepthWithFootprint.footprintCount =
-    std::min<int>(static_cast<int>(footprintCoords.size()), LogicalDepthParams::kMaxFootprintTiles);
-  for (int i = 0; i < logicalDepthWithFootprint.footprintCount; ++i) {
-    logicalDepthWithFootprint.footprintOffsets[static_cast<std::size_t>(i) * 2 + 0] =
-      static_cast<float>(footprintCoords[static_cast<std::size_t>(i)].x - instance.placement.topLeft.x);
-    logicalDepthWithFootprint.footprintOffsets[static_cast<std::size_t>(i) * 2 + 1] =
-      static_cast<float>(footprintCoords[static_cast<std::size_t>(i)].y - instance.placement.topLeft.y);
-  }
+  const auto logicalDepthWithFootprint = buildingLogicalDepth(instance.placement, tileWidth, tileHeight);
 
-  auto currentLayerTexture = [&](const BuildingAsset::RenderLayer& layer) -> const UiTexture* {
-    if (layer.textures.empty()) {
-      return nullptr;
-    }
-    const UiTexture* layerTexture = &layer.textures.front();
-    if (layer.textures.size() > 1 && layer.frameDurationMs > 0) {
-      const auto frameDurationMs = std::max<std::uint32_t>(50, layer.frameDurationMs);
-      const std::size_t frameIndex = static_cast<std::size_t>(
-        ((nowTicks - instance.stateStartTicks) / frameDurationMs) % layer.textures.size());
-      layerTexture = &layer.textures[frameIndex];
-    }
-    return layerTexture;
-  };
-
-  auto drawCompleteLayer = [&](const UiTexture& layerTexture, const BuildingAsset::LayerRole role) {
+  auto drawCompleteLayer = [&](const UiTexture& layerTexture, const BuildingAsset::RenderLayer& layer) {
+    const auto spriteTopLeft = buildingSpriteTopLeft(foundationAnchor, layerTexture.width, layerTexture.height, layer.offset);
     const Vec2 layerTopRight{spriteTopLeft.x + layerTexture.width, spriteTopLeft.y};
     const Vec2 layerBottomRight{spriteTopLeft.x + layerTexture.width, spriteTopLeft.y + layerTexture.height};
     const Vec2 layerBottomLeft{spriteTopLeft.x, spriteTopLeft.y + layerTexture.height};
@@ -488,7 +346,7 @@ void drawBuildingInstance(Renderer2D& renderer,
                                                 tintG,
                                                 tintB,
                                                 tintA);
-    const bool layerWritesDepth = !isUnderUnitLayer(role);
+    const bool layerWritesDepth = !isUnderUnitLayer(layer.role);
     if (!layerWritesDepth) {
       glDepthMask(GL_FALSE);
     }
@@ -508,8 +366,8 @@ void drawBuildingInstance(Renderer2D& renderer,
       if (isProductionLayer(layer.role) || !isUnderUnitLayer(layer.role)) {
         continue;
       }
-      if (const auto* layerTexture = currentLayerTexture(layer)) {
-        drawCompleteLayer(*layerTexture, layer.role);
+      if (const auto* layerTexture = buildingLayerTexture(layer, instance, nowTicks)) {
+        drawCompleteLayer(*layerTexture, layer);
       }
     }
   }
@@ -564,38 +422,9 @@ void drawBuildingInstance(Renderer2D& renderer,
       continue;
     }
 
-    const UiTexture* layerTexture = &layer.textures.front();
-    if (layer.textures.size() > 1 && layer.frameDurationMs > 0) {
-      const auto frameDurationMs = std::max<std::uint32_t>(50, layer.frameDurationMs);
-      const std::size_t frameIndex = static_cast<std::size_t>(
-        ((nowTicks - instance.stateStartTicks) / frameDurationMs) % layer.textures.size());
-      layerTexture = &layer.textures[frameIndex];
-    }
+    const UiTexture* layerTexture = buildingLayerTexture(layer, instance, nowTicks);
 
-    const Vec2 layerTopRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y};
-    const Vec2 layerBottomRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y + layerTexture->height};
-    const Vec2 layerBottomLeft{spriteTopLeft.x, spriteTopLeft.y + layerTexture->height};
-    const auto layerVertices = makeQuadVertices(spriteTopLeft,
-                                                layerTopRight,
-                                                layerBottomRight,
-                                                layerBottomLeft,
-                                                depth01,
-                                                tintR,
-                                                tintG,
-                                                tintB,
-                                                tintA);
-    const bool layerWritesDepth = !isUnderUnitLayer(layer.role);
-    if (!layerWritesDepth) {
-      glDepthMask(GL_FALSE);
-    }
-    renderer.draw(GL_TRIANGLES,
-                  *layerTexture,
-                  layerVertices.data(),
-                  layerVertices.size(),
-                  logicalDepthWithFootprint);
-    if (!layerWritesDepth) {
-      glDepthMask(GL_TRUE);
-    }
+    drawCompleteLayer(*layerTexture, layer);
   }
 }
 

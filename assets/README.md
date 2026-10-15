@@ -21,6 +21,7 @@
 - `palettes`
   - 调色盘和 `vpl` 查表
   - `theater`：剧场相关 palette
+  - `resources`：原版矿物覆盖层调色盘 `temperat.pal`、`snow.pal`、`urban.pal`
   - `ui`：界面、侧栏、覆盖层 palette
   - `voxel`：体素渲染相关 `vpl`
 
@@ -65,10 +66,15 @@
   - 预留给步兵资源
 
 - `effects`
-  - 预留给特效资源
+  - 战斗及采集特效资源
+  - `harvesting/oregath.shp`：原版矿车采集动画，8 个方向 × 15 帧
 
 - `terrain`
-  - 预留给地形、地块和地图资源
+  - 地形、地块和地图资源
+  - `resources/temperate`、`resources/snow`、`resources/urban`：原版 `tib01..12` 矿石与 `gem01..12` 宝石覆盖层
+  - `.tem/.sno/.urb` 保留原名和二进制内容；这些矿物文件的内部格式是 SHP，不是 TMP 地块
+  - 每个文件有 12 帧矿量和 12 帧空白阴影；矿物使用 `palettes/resources` 下对应主题的覆盖层调色盘，不应用阵营重映射或建筑亮度缩放
+  - 采集动画 `oregath.shp` 使用 `palettes/effects/anim.pal`；普通 TMP 地块使用 `iso*.pal`，不是矿物调色盘
 
 ## 当前约定
 

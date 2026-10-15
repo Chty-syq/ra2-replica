@@ -1,6 +1,7 @@
 #pragma once
 
 #include "demo_style.h"
+#include "simulation/game_clock.h"
 #include "voxel_normals.h"
 
 #include <SDL.h>
@@ -30,7 +31,7 @@ struct DisplayDebugState {
 };
 
 struct GameplayDebugState {
-  float speedMultiplier = 1.0f;
+  ra2::GameSpeed speed{};
 };
 
 struct WeaponDebugState {
@@ -99,6 +100,7 @@ void processImGuiDebugPanelEvent(const SDL_Event& event);
 void beginImGuiDebugPanelFrame();
 [[nodiscard]] bool drawImGuiDebugPanel(ImGuiDebugPanelState& state, const HouseColorSet& houseColors);
 void renderImGuiDebugPanel();
+void drawGameSpeedControls(GameplayDebugState& state);
 [[nodiscard]] bool imguiDebugPanelWantsMouse();
 [[nodiscard]] bool imguiDebugPanelWantsKeyboard();
 [[nodiscard]] bool imguiDebugPanelContainsPoint(const ImGuiDebugPanelState& state, float mouseX, float mouseY);

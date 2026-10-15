@@ -1,0 +1,72 @@
+{
+  "reference_kind": "static inspection; not a vanilla RA2 1.006 runtime trace",
+  "file_version": "1.11-CnCNet-patch-213aa6b",
+  "sha256": "07188e1caf521610f9485cd302a1bec894d2dcc05bdb69c5593e794ed88cd1c2",
+  "unit_speed_import": {
+    "address": "0x71464A",
+    "formula": "min(255, floor(clamp(Speed, 0, 100) * 256 / 100))"
+  },
+  "production": {
+    "type_base_address": "0x711EE0",
+    "cost_times_buildspeed_factor": 0.9,
+    "factory_address": "0x4C9EA0",
+    "stage_count": 54,
+    "interval_bounds": [
+      1,
+      255
+    ]
+  },
+  "buildup": {
+    "type_import_address": "0x45F2DD",
+    "frames_per_game_minute": 900.0,
+    "note": "Original divides this budget by SHP buildup frame count; replica currently uses the nominal total."
+  },
+  "animation": {
+    "rate_import_address": "0x427F7B",
+    "delay_formula": "Rate > 0 ? floor(900 / Rate) : 0; absent/-1 leaves default 1",
+    "normalize_address": "0x5FB2E0",
+    "small_delay_rows_1_to_4_by_internal_index_0_to_7": [
+      [
+        2,
+        2,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      [
+        3,
+        3,
+        3,
+        2,
+        2,
+        2,
+        1,
+        1
+      ],
+      [
+        5,
+        4,
+        4,
+        3,
+        3,
+        2,
+        2,
+        1
+      ],
+      [
+        7,
+        6,
+        5,
+        4,
+        4,
+        4,
+        3,
+        2
+      ]
+    ],
+    "large_delay_formula": "floor(delay * 8 / (internal_speed_index + 1))"
+  }
+}

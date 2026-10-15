@@ -1,4 +1,5 @@
 #include "demo_scene.h"
+#include "presentation/building_health.h"
 #include "rhino_unit.h"
 
 #include <SDL_opengl.h>
@@ -207,10 +208,6 @@ constexpr float kArtHeightToBonePixelsScale = 0.58f;
   }};
 }
 
-[[nodiscard]] bool isWarFactory(const std::string& buildingId) {
-  return buildingId == "GAWEAP" || buildingId == "NAWEAP";
-}
-
 [[nodiscard]] bool isProductionLayer(const BuildingAsset::LayerRole role) {
   return role == BuildingAsset::LayerRole::ProductionUnderUnit ||
          role == BuildingAsset::LayerRole::ProductionOverUnit;
@@ -225,7 +222,7 @@ constexpr float kArtHeightToBonePixelsScale = 0.58f;
                                              const RhinoUnitState& rhinoUnit) {
   const float localX = rhinoUnit.tilePosition.x - static_cast<float>(building.placement.topLeft.x);
   const float localY = rhinoUnit.tilePosition.y - static_cast<float>(building.placement.topLeft.y);
-  return localX >= 0.25f && localX <= 4.25f && localY >= -1.0f && localY <= 1.5f;
+  return localX >= 2.25f && localX <= 6.25f && localY >= 0.0f && localY <= 2.5f;
 }
 
 void drawSolidRect(Renderer2D& renderer,
@@ -398,6 +395,11 @@ void drawEmptyBuildingHealthPip(Renderer2D& renderer,
   }
 }
 
+void drawWarFactoryProductionLayerSubset(Renderer2D& renderer, const BuildingAsset& asset,
+                                         const BuildingInstance& building, Vec2 mapOrigin,
+                                         float tileWidth, float tileHeight, std::uint32_t nowTicks,
+                                         float depth01, bool underUnitPass);
+
 void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                    const BuildingAsset& asset,
                                    const BuildingInstance& instance,
@@ -407,40 +409,33 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                    const float tileHeight,
                                    const std::uint32_t nowTicks,
                                    const float depth01) {
+  if (instance.state == BuildingState::Complete && instance.productionSplit && instance.factoryExitActive) {
+    drawWarFactoryProductionLayerSubset(renderer, asset, instance, origin, tileWidth, tileHeight, nowTicks, depth01, false);
+    return;
+  }
   const UiTexture* texture = &asset.completeTexture;
-  const DecodedFrame* frame = &asset.completeFrame;
 
   if ((instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing) &&
       !asset.buildupTextures.empty()) {
-    constexpr std::uint32_t kBuildupFrameDurationMs = 50;
-    const std::size_t elapsedFrame = std::min<std::size_t>(
-      (nowTicks - instance.stateStartTicks) / kBuildupFrameDurationMs,
-      asset.buildupTextures.size() - 1);
-    const std::size_t frameIndex = instance.state == BuildingState::Packing
-                                     ? asset.buildupTextures.size() - 1 - elapsedFrame
-                                     : elapsedFrame;
+    const auto frameIndex = buildingBuildupFrameIndex(instance, asset.buildupTextures.size(), nowTicks);
     texture = &asset.buildupTextures[frameIndex];
-    frame = &asset.buildupFrames[frameIndex];
   }
 
-  const auto foundationAnchor = isoToScreen(instance.placement.topLeft.x,
-                                            instance.placement.topLeft.y,
-                                            origin,
-                                            tileWidth,
-                                            tileHeight);
-  const auto anchor = spriteAnchorInFrame(*frame, asset.foundation);
-  const Vec2 spriteTopLeft{foundationAnchor.x - anchor.x, foundationAnchor.y - anchor.y};
+  const auto foundationAnchor = buildingDrawCenter(instance.placement, origin, tileWidth, tileHeight);
+  const bool buildup = instance.state == BuildingState::Constructing || instance.state == BuildingState::Packing;
+  const auto offset = !buildup && !asset.completeLayers.empty() ? asset.completeLayers.front().offset : PixelOffset{};
+  const auto spriteTopLeft = buildingSpriteTopLeft(foundationAnchor, texture->width, texture->height, offset);
   const Vec2 spriteTopRight{spriteTopLeft.x + texture->width, spriteTopLeft.y};
 
   const bool warFactoryExitLane =
-    instance.state == BuildingState::Complete && isWarFactory(asset.id) &&
+    instance.state == BuildingState::Complete && asset.art.layeredFactory &&
     rhinoInWarFactoryExitLane(instance, rhinoUnit);
   const bool baseLayerUnderUnit =
     !asset.completeLayers.empty() &&
     asset.completeLayers.front().role == BuildingAsset::LayerRole::UnderUnit;
   if (!baseLayerUnderUnit && !warFactoryExitLane) {
     float baseForegroundHeight = static_cast<float>(texture->height);
-    if (instance.state == BuildingState::Complete && isWarFactory(asset.id)) {
+    if (instance.state == BuildingState::Complete && asset.art.layeredFactory) {
       baseForegroundHeight = std::max(0.0f, baseForegroundHeight - tileHeight * 1.25f);
     }
 
@@ -475,14 +470,9 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
       continue;
     }
 
-    const UiTexture* layerTexture = &layer.textures.front();
-    if (layer.textures.size() > 1 && layer.frameDurationMs > 0) {
-      const auto frameDurationMs = std::max<std::uint32_t>(50, layer.frameDurationMs);
-      const std::size_t frameIndex = static_cast<std::size_t>(
-        ((nowTicks - instance.stateStartTicks) / frameDurationMs) % layer.textures.size());
-      layerTexture = &layer.textures[frameIndex];
-    }
+    const UiTexture* layerTexture = buildingLayerTexture(layer, instance, nowTicks);
 
+    const auto spriteTopLeft = buildingSpriteTopLeft(foundationAnchor, layerTexture->width, layerTexture->height, layer.offset);
     const Vec2 layerTopRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y};
     const Vec2 layerBottomRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y + layerTexture->height};
     const Vec2 layerBottomLeft{spriteTopLeft.x, spriteTopLeft.y + layerTexture->height};
@@ -499,23 +489,6 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
   }
 }
 
-[[nodiscard]] const UiTexture* currentLayerTexture(const BuildingAsset::RenderLayer& layer,
-                                                   const BuildingInstance& instance,
-                                                   const std::uint32_t nowTicks) {
-  if (layer.textures.empty()) {
-    return nullptr;
-  }
-
-  const UiTexture* layerTexture = &layer.textures.front();
-  if (layer.textures.size() > 1 && layer.frameDurationMs > 0) {
-    const auto frameDurationMs = std::max<std::uint32_t>(50, layer.frameDurationMs);
-    const std::size_t frameIndex = static_cast<std::size_t>(
-      ((nowTicks - instance.stateStartTicks) / frameDurationMs) % layer.textures.size());
-    layerTexture = &layer.textures[frameIndex];
-  }
-  return layerTexture;
-}
-
 void drawWarFactoryProductionLayerSubset(Renderer2D& renderer,
                                          const BuildingAsset& asset,
                                          const BuildingInstance& building,
@@ -525,13 +498,7 @@ void drawWarFactoryProductionLayerSubset(Renderer2D& renderer,
                                          const std::uint32_t nowTicks,
                                          const float depth01,
                                          const bool underUnitPass) {
-  const auto foundationAnchor = isoToScreen(building.placement.topLeft.x,
-                                            building.placement.topLeft.y,
-                                            mapOrigin,
-                                            tileWidth,
-                                            tileHeight);
-  const auto anchor = spriteAnchorInFrame(asset.completeFrame, asset.foundation);
-  const Vec2 spriteTopLeft{foundationAnchor.x - anchor.x, foundationAnchor.y - anchor.y};
+  const auto foundationAnchor = buildingDrawCenter(building.placement, mapOrigin, tileWidth, tileHeight);
 
   for (const auto& layer : asset.completeLayers) {
     const bool drawLayer =
@@ -543,11 +510,12 @@ void drawWarFactoryProductionLayerSubset(Renderer2D& renderer,
       continue;
     }
 
-    const UiTexture* layerTexture = currentLayerTexture(layer, building, nowTicks);
+    const UiTexture* layerTexture = buildingLayerTexture(layer, building, nowTicks);
     if (layerTexture == nullptr) {
       continue;
     }
 
+    const auto spriteTopLeft = buildingSpriteTopLeft(foundationAnchor, layerTexture->width, layerTexture->height, layer.offset);
     const Vec2 layerTopRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y};
     const Vec2 layerBottomRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y + layerTexture->height};
     const Vec2 layerBottomLeft{spriteTopLeft.x, spriteTopLeft.y + layerTexture->height};
@@ -775,12 +743,9 @@ void drawBuildingHealthOverlay(Renderer2D& renderer,
     drawSelectedBuildingBone(renderer, asset, building, mapOrigin, tileWidth, tileHeight);
   }
 
-  const int maxBloodNum = std::max(1, building.maxHp / 100);
-  int currentBloodNum = building.hp <= 0 ? 0 : building.hp / 100;
-  if (building.hp > 0) {
-    currentBloodNum = std::max(1, currentBloodNum);
-  }
-  currentBloodNum = std::clamp(currentBloodNum, 0, maxBloodNum);
+  const auto pips = ra2::buildingHealthPips(asset.foundation.width, asset.foundation.height, building.hp, building.maxHp);
+  const int maxBloodNum = pips.total;
+  const int currentBloodNum = pips.filled;
 
   constexpr float kScale = 1.0f;
   const int barWidth = 10 + (maxBloodNum - 1) * 4;
@@ -915,7 +880,7 @@ void drawWarFactoryOverUnitLayers(Renderer2D& renderer,
                                   const std::uint32_t nowTicks,
                                   const float depth01,
                                   const bool productionSplit) {
-  if (!isWarFactory(asset.id) || building.state != BuildingState::Complete) {
+  if (!asset.art.layeredFactory || building.state != BuildingState::Complete) {
     return;
   }
 
@@ -953,7 +918,7 @@ void drawWarFactoryProductionUnderUnitLayers(Renderer2D& renderer,
                                              const float tileHeight,
                                              const std::uint32_t nowTicks,
                                              const float depth01) {
-  if (asset.id != "NAWEAP" || building.state != BuildingState::Complete) {
+  if (!asset.art.productionSplit || building.state != BuildingState::Complete) {
     return;
   }
 

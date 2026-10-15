@@ -21,10 +21,11 @@ struct DemoAppConfig {
   static constexpr Vec2 kMapOrigin{640.0f, 110.0f};
 };
 
-// 同一剧院下，建筑主体和地形分别使用不同调色盘。
+// 建筑、普通地块和矿物覆盖层分别使用 unit、iso、剧场 overlay 调色盘。
 struct TheaterPaletteSet {
   Palette unit;
   Palette terrain;
+  Palette resource;
 };
 
 struct PaletteLibrary {

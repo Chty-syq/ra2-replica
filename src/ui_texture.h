@@ -13,7 +13,9 @@ enum class UiTextureColorMode {
 enum class UiTexturePaletteKind {
   None,
   Unit,
-  Terrain
+  Terrain,
+  Resource,
+  Animation
 };
 
 struct UiTexture {
