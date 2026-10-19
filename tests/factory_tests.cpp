@@ -99,6 +99,21 @@ void deferredCommands(const DefinitionRegistry& defs) {
   footprintIntact(deployment,deployFactory);
   require(view(deployment,mcv).cell == TileCoord{4,-1}, "MCV deployed at an internal route point");
 }
+void factionValidation(const DefinitionRegistry& defs) {
+  for(const auto& [id,unit]:defs.units()) {
+    (void)id;if(unit.support()==SupportStatus::Unsupported || unit.category==TypeCategory::Building || unit.visual.faction.empty())continue;
+    const bool allied=canonicalId(unit.visual.faction)=="ALLIED";
+    const auto factory=unit.infantry?(allied?"GAPILE":"NAHAND"):unit.naval?(allied?"GAYARD":"NAYARD"):
+      unit.aircraft && unit.aircraft->fixedWing?"GAAIRC":allied?"GAWEAP":"NAWEAP";
+    if(unit.spawnedAircraft || unit.missileSpawn)continue;
+    require(defs.factoryMatches(defs.unit(factory),unit),"Correct native factory rejected supported unit");
+    const auto wrong=unit.infantry?(allied?"NAHAND":"GAPILE"):unit.naval?(allied?"NAYARD":"GAYARD"):allied?"NAWEAP":"GAWEAP";
+    require(!defs.factoryMatches(defs.unit(wrong),unit),"Opposite-faction factory accepted unit because Owner contains both sides");
+  }
+  World w(defs);const auto allied=w.spawn("GAWEAP",{}),soviet=w.spawn("NAWEAP",{10,0});
+  w.enqueue({1,0,1,CommandKind::Produce,allied,0,{},"HTNK"});w.enqueue({1,0,2,CommandKind::Produce,soviet,0,{},"MTNK"});steps(w,1);
+  require(view(w,allied).queueSize==0 && view(w,soviet).queueSize==0,"Wrong-factory command bypassed sidebar faction restriction");
+}
 void queuesAndContention(const DefinitionRegistry& defs) {
   World queue(defs);
   const auto factory = queue.spawn("GAWEAP", {-2,-1}), child = produce(queue,factory);
@@ -200,7 +215,7 @@ int main(int argc, char** argv) {
   try {
     require(argc == 2, "Expected settings path");
     const auto defs = fastProductionFixture(argv[1]);
-    phasesAndReservations(defs); deferredCommands(defs); queuesAndContention(defs);
+    factionValidation(defs);phasesAndReservations(defs); deferredCommands(defs); queuesAndContention(defs);
     destruction(defs); validationAndReplay(defs);
     std::cout << "Factory egress regressions passed\n";
     return 0;

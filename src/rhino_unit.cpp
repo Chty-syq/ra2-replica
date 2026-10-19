@@ -286,7 +286,14 @@ bool hitTestRhinoUnit(const RhinoUnitState& unit,
                       const Vec2 origin,
                       const float tileWidth,
                       const float tileHeight) {
-  const auto anchor = rhinoGroundAnchor(unit, origin, tileWidth, tileHeight);
+  if(!unit.disguiseTargetable)return false;
+  auto anchor = rhinoGroundAnchor(unit, origin, tileWidth, tileHeight);
+  anchor.y-=unit.heightLeptons*tileHeight/256;
+  if(unit.disguiseVisible) {
+    const float scale=tileWidth/60;
+    const float y=anchor.y;
+    return std::abs(mouseX-(anchor.x-scale))<=40*scale && mouseY>=y-96*scale && mouseY<=y+10*scale;
+  }
   const float dx = (mouseX - anchor.x) / (tileWidth * 0.58f);
   const float dy = (mouseY - anchor.y) / (tileHeight * 0.92f);
   return dx * dx + dy * dy <= 1.0f;
@@ -496,6 +503,9 @@ void drawRhinoUnit(Renderer2D& renderer,
                    const VplBoxRendererState& renderState) {
   (void)nowTicks;
   const Vec2 elevatedOrigin{origin.x,origin.y-unit.heightLeptons*tileHeight/256.0f};
+  auto state=renderState;
+  if(unit.aircraft){state.airDepthOffset=.003f;state.shadowDepthBias01=-.002f;}
+  if(unit.airborne){state.shadowScreenOffsetY=(unit.heightLeptons-unit.groundHeightLeptons)*tileHeight/256;state.airDepthOffset=.02f;}
   drawDirectVoxelUnitInstance(rhinoRenderer,
                               unit.tilePosition,
                               elevatedOrigin,
@@ -504,7 +514,7 @@ void drawRhinoUnit(Renderer2D& renderer,
                               footprintK,
                               viewportWidth,
                               viewportHeight,
-                              renderState);
+                              state);
   renderer.beginUiPass();
   drawRhinoHealthBar(renderer, uiAssets, unit, elevatedOrigin, tileWidth, tileHeight);
 }

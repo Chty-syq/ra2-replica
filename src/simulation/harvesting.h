@@ -43,6 +43,7 @@ public:
   explicit HarvestSystem(const DefinitionRegistry& definitions) : definitions_(definitions) {}
   void add(MiningEntity id, const UnitTypeDef& type);
   void remove(MiningEntity id);
+  void captured(MiningEntity id,HarvestHost& host);
   void stop(MiningEntity id);
   bool harvest(MiningEntity id, TileCoord near);
   bool returnTo(MiningEntity id, MiningEntity refinery, const HarvestHost& host);

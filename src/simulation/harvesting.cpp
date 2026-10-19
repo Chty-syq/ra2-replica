@@ -49,6 +49,15 @@ void HarvestSystem::remove(MiningEntity id) {
 void HarvestSystem::stop(MiningEntity id) {
   if (const auto it=miners_.find(id); it!=miners_.end()) { release(id,it->second); it->second.phase=HarvestPhase::Stopped; }
 }
+void HarvestSystem::captured(MiningEntity id,HarvestHost& host) {
+  for(auto& [minerId,miner]:miners_)if(miner.refinery==id) {
+    release(minerId,miner);host.miningHalt(minerId);miner.phase=HarvestPhase::SeekingRefinery;miner.timer=0;
+  }
+  if(auto found=refineries_.find(id);found!=refineries_.end()) {
+    found->second.queue.clear();std::fill(found->second.slots.begin(),found->second.slots.end(),0);
+    found->second.freeUnitPending=false;
+  }
+}
 bool HarvestSystem::harvest(MiningEntity id, TileCoord near) {
   const auto it=miners_.find(id); if (it==miners_.end()) return false;
   auto& miner=it->second; release(id,miner);

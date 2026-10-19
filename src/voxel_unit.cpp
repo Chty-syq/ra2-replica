@@ -35,7 +35,7 @@ void drawDirectVoxelUnitInstance(VplBoxRenderer& renderer,
                                viewportWidth,
                                viewportHeight,
                                groundAnchor.x,
-                               groundAnchor.y,
+                               groundAnchor.y+effectiveState.shadowScreenOffsetY,
                                shadowDepthBase,
                                kDirectDepthScale);
   renderer.renderInWorld(effectiveState,
@@ -43,6 +43,6 @@ void drawDirectVoxelUnitInstance(VplBoxRenderer& renderer,
                          viewportHeight,
                          groundAnchor.x,
                          groundAnchor.y,
-                         depthBase,
+                         std::clamp(depthBase-effectiveState.airDepthOffset,.001f,.999f),
                          kDirectDepthScale);
 }

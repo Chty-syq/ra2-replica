@@ -61,10 +61,16 @@ public:
             std::size_t vertexCount,
             const LogicalDepthParams& logicalDepth);
 
+  // Screen-space beam with fractional pixel coverage and the classic cubic
+  // coverage/intensity response. Endpoints retain their world depth.
+  void drawLaserLine(const RenderVertex& start, const RenderVertex& end,
+                     float width, float intensity);
+
   void setIndexedPalettes(const Palette& unitPalette, const Palette& terrainPalette);
   // RA2 minerals use theater overlay palettes without the building light scale.
   void setResourcePalettes(const Palette& resourcePalette, const Palette& animationPalette);
   void setRemapColor(const Rgba& color) noexcept;
+  Rgba remapColor() const noexcept { return remapColor_; }
 
   [[nodiscard]] GLuint whiteTexture() const noexcept { return whiteTexture_; }
 
@@ -77,7 +83,8 @@ private:
                     bool paletteRemap,
                     const LogicalDepthParams* logicalDepth,
                     const RenderVertex* vertices,
-                    std::size_t vertexCount);
+                    std::size_t vertexCount,
+                    bool laserLine = false);
   void ensureInitialized() const;
 
   bool initialized_ = false;
@@ -95,6 +102,7 @@ private:
   GLint textureUniform_ = -1;
   GLint paletteUniform_ = -1;
   GLint textureModeUniform_ = -1;
+  GLint laserLineUniform_ = -1;
   GLint enableRemapUniform_ = -1;
   GLint remapColorUniform_ = -1;
   GLint logicalCoordTextureUniform_ = -1;

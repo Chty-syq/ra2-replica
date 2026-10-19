@@ -151,7 +151,7 @@ void ballistics(const DefinitionRegistry& defs) {
   const auto aim=w.shots()[0].target;
   step(w,4); require(w.shots()[0].target==aim,"Ordinary cannon incorrectly homes after launch");
   step(w,25); require(unit(w,target).hp<5000,"Constant-speed target was missed despite unobstructed lead");
-  const auto slowGravity=changed(harmless,"[General]\nGravity=1");
+  const auto slowGravity=changed(harmless,"[AudioVisual]\nGravity=1");
   World low(slowGravity); const auto tank=low.spawn("HTNK",{});
   low.enqueue({1,0,1,CommandKind::AttackGround,tank,0,{5,0}}); low.step();
   require(low.shots()[0].impact-low.shots()[0].started>20,"Configured gravity is ignored");

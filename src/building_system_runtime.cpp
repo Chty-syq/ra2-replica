@@ -13,7 +13,7 @@
 #include <utility>
 
 namespace {
-constexpr std::array<std::pair<std::string_view, std::string_view>, 17> kAlliedBuildableIconToBuilding{{
+constexpr std::array<std::pair<std::string_view, std::string_view>, 18> kAlliedBuildableIconToBuilding{{
   {"powricon", "GAPOWR"},
   {"reficon", "GAREFN"},
   {"brrkicon", "GAPILE"},
@@ -26,11 +26,12 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 17> kAlliedB
   {"wallicon", "GAWALL"},
   {"pillicon", "GAPILL"},
   {"samicon", "NASAM"},
-  {"prisicon", "GAPRIS"},
+  {"prisicon", "ATESLA"},
   {"gapicon", "GAGAP"},
   {"gcanicon", "GTGCAN"},
+  {"asaticon", "GASPYSAT"},
   {"csphicon", "GACSPH"},
-  {"wethicon", "GAWETH"}
+  {"wethicon", "GAWEAT"}
 }};
 
 constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kSovietBuildableIconToBuilding{{
@@ -45,11 +46,11 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 16> kSovietB
   {"nrcticon", "NANRCT"},
   {"nwalicon", "NAWALL"},
   {"flakicon", "NAFLAK"},
-  {"samicon", "NASAM"},
-  {"tslaicon", "NATSLA"},
+  {"plticon", "NALASR"},
+  {"tslaicon", "TESLA"},
   {"ironicon", "NAIRON"},
-  {"nukeicon", "NAMISL"},
-  {"npsiicon", "NAPSIS"}
+  {"msslicon", "NAMISL"},
+  {"psisicon", "NAPSIS"}
 }};
 
 template <typename Fn>
@@ -110,6 +111,12 @@ template <typename T>
 
 using FileIndex = std::unordered_map<std::string, std::filesystem::path>;
 using DecodedFrameCache = std::vector<DecodedFrame>;
+
+std::vector<std::uint8_t> hitMask(const DecodedFrame& frame) {
+  std::vector<std::uint8_t> mask((frame.indices.size()+7)/8);
+  for(std::size_t i=0;i<frame.indices.size();++i)if(frame.indices[i])mask[i/8]|=1u<<(i%8);
+  return mask;
+}
 
 [[nodiscard]] std::string toLowerAscii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char ch) {
@@ -195,7 +202,8 @@ using DecodedFrameCache = std::vector<DecodedFrame>;
       {},
       UiTextureColorMode::IndexedPalette,
       paletteKind,
-      paletteRemap
+      paletteRemap,
+      hitMask(frame)
     });
   }
   return textures;
@@ -252,7 +260,7 @@ struct LayerSpec {
 
   const char owner = name[0];
   const char type = name[1];
-  if ((owner != 'g' && owner != 'n') ||
+  if ((owner != 'g' && owner != 'n' && owner != 'c') ||
       (type != 'a' && type != 'g' && type != 'u' && type != 't')) {
     return name;
   }
@@ -294,7 +302,7 @@ struct LayerSpec {
   } else {
     switch (theater) {
       case TheaterStyle::Temperate:
-        pushCandidate('g');
+        pushCandidate(owner=='c'?'t':'g');
         pushCandidate('a');
         pushCandidate('u');
         pushCandidate('t');
@@ -344,6 +352,7 @@ struct LayerSpec {
     else if (layer.role == "OVERUNIT") spec.role = BuildingAsset::LayerRole::OverUnit;
     else if (layer.role == "PRODUCTIONUNDERUNIT") spec.role = BuildingAsset::LayerRole::ProductionUnderUnit;
     else if (layer.role == "PRODUCTIONOVERUNIT") spec.role = BuildingAsset::LayerRole::ProductionOverUnit;
+    else if (layer.role == "FIRE") spec.role = BuildingAsset::LayerRole::Fire;
     else if (layer.role != "NORMAL") throw std::runtime_error("Unknown layer role in " + buildingId + ": " + layer.role);
     if (spec.animationId || !spec.spriteName.empty()) specs.push_back(std::move(spec));
   }
@@ -379,7 +388,9 @@ struct LayerSpec {
 
   std::size_t end = frameCount - 1;
   if (animation.loopEnd.has_value()) {
-    end = static_cast<std::size_t>(std::max(0, *animation.loopEnd));
+    // LoopEnd is exclusive (NAMISL_E: 0..1 is one healthy frame;
+    // frame 1 is damaged). End, used by one-shot firing anims, is inclusive.
+    end = static_cast<std::size_t>(std::max(0, *animation.loopEnd-1));
   } else if (animation.end.has_value()) {
     end = static_cast<std::size_t>(std::max(0, *animation.end));
   }
@@ -403,8 +414,9 @@ struct LayerSpec {
                                                          const UiTexturePaletteKind paletteKind,
                                                          const bool paletteRemap,
                                                          const TheaterStyle theater,
-                                                         const bool newTheater) {
-  const auto resolvedName = resolveTheaterVariant(spriteRoot, spriteName, theater, newTheater, false);
+                                                         const bool newTheater,
+                                                         const bool wall) {
+  const auto resolvedName = resolveTheaterVariant(spriteRoot, spriteName, theater, newTheater, wall);
   const auto path = requireShpPath(spriteRoot, resolvedName);
   const auto& frames = decodedFramesForPath(path);
   const auto& frame = frames.front();
@@ -418,7 +430,8 @@ struct LayerSpec {
       {},
       UiTextureColorMode::IndexedPalette,
       paletteKind,
-      paletteRemap
+      paletteRemap,
+      hitMask(frame)
     }},
     0
   };
@@ -462,7 +475,8 @@ struct LayerSpec {
       {},
       UiTextureColorMode::IndexedPalette,
       paletteKind,
-      paletteRemap
+      paletteRemap,
+      hitMask(frame)
     });
   }
 
@@ -498,6 +512,7 @@ struct LayerSpec {
                                      art.newTheater);
       if (!layer.textures.empty()) {
         layer.role = spec.role;
+        layer.hideWhenUnpowered=art.activeAnim && *art.activeAnim==*spec.animationId && !art.activeAnimPowered;
         const auto animation = artIni.animation(*spec.animationId);
         layer.offset = {spec.placement.offset.x, spec.placement.offset.y + animation.yDrawOffset};
         layer.zAdjust = spec.placement.zAdjust;
@@ -512,7 +527,7 @@ struct LayerSpec {
       continue;
     }
 
-    const auto resolvedName = resolveTheaterVariant(spriteRoot, spec.spriteName, theater, art.newTheater, false);
+    const auto resolvedName = resolveTheaterVariant(spriteRoot, spec.spriteName, theater, art.newTheater, art.wall);
     if (!shpExists(spriteRoot, resolvedName)) {
       continue;
     }
@@ -522,7 +537,16 @@ struct LayerSpec {
                                  paletteKind,
                                  paletteRemap,
                                  theater,
-                                 art.newTheater);
+                                 art.newTheater,
+                                 art.wall);
+    if(art.garrisonFrames || art.wall) {
+      for(auto& texture:layer.textures)if(texture.texture)glDeleteTextures(1,&texture.texture);
+      const auto path=requireShpPath(spriteRoot,resolvedName);
+      layer.textures=firstHalfOrSingle(loadAllShpTextures(path,paletteKind,paletteRemap));
+      layer.sourceFrames.resize(layer.textures.size());
+      for(std::size_t i=0;i<layer.sourceFrames.size();++i)layer.sourceFrames[i]=i;
+      layer.garrisonFrames=art.garrisonFrames;layer.wallFrames=art.wall;
+    }
     layer.role = spec.role;
     layers.push_back(std::move(layer));
   }
@@ -548,6 +572,8 @@ struct LayerSpec {
   (void)terrainPalette;
   const auto paletteKind = art.terrainPalette ? UiTexturePaletteKind::Terrain
                                               : UiTexturePaletteKind::Unit;
+  // Ownable structures use the player palette, including GAPRIS/NATSLA
+  // whose legacy Remapable=no does not disable their house-color ramp.
   const bool paletteRemap = !art.terrainPalette;
 
   const auto spriteName = art.image.empty() ? buildingId : art.image;
@@ -571,7 +597,7 @@ struct LayerSpec {
     throw std::runtime_error("No complete layers found for building: " + buildingId);
   }
 
-  auto baseLayerName = resolveTheaterVariant(spriteRoot, spriteName, theater, art.newTheater, false);
+  auto baseLayerName = resolveTheaterVariant(spriteRoot, spriteName, theater, art.newTheater, art.wall);
   if (!shpExists(spriteRoot, baseLayerName)) {
     baseLayerName = completeLayers.front().id;
   }
@@ -600,7 +626,7 @@ struct LayerSpec {
 
   std::vector<UiTexture> buildupTextures;
   std::vector<DecodedFrame> buildupFrames;
-  if (const auto buildupPath = findIndexedFile(spriteRoot, buildupName + ".shp"); buildupPath.has_value()) {
+  if (const auto buildupPath = findIndexedFile(spriteRoot, buildupName + ".shp"); !art.wall && buildupPath.has_value()) {
     buildupTextures = firstHalfOrSingle(loadAllShpTextures(*buildupPath, paletteKind, paletteRemap));
     buildupFrames = firstHalfOrSingle(loadAllDecodedFrames(*buildupPath));
     for (std::size_t frameIndex = 0; frameIndex < buildupTextures.size() && frameIndex < buildupFrames.size(); ++frameIndex) {

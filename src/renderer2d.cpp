@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
@@ -59,6 +60,7 @@ uniform sampler2D uTexture;
 uniform sampler2D uPaletteTexture;
 uniform sampler2D uLogicalCoordTexture;
 uniform int uTextureMode;
+uniform vec4 uLaserLine; // length, half width, coverage pixel size, life intensity
 uniform int uEnableRemap;
 uniform int uUseLogicalDepth;
 uniform vec4 uRemapColor;
@@ -112,8 +114,20 @@ float logicalDepthFromScreenOffset(vec2 screenOffset) {
 }
 
 void main() {
+  gl_FragDepth = gl_FragCoord.z;
   vec4 color;
-  if (uTextureMode == 0) {
+  if (uTextureMode == 2) {
+    // Approximate pixel coverage of the line's footprint instead of drawing
+    // several hard-edged strips. Fade the coverage before applying
+    // the cubic response used by the classic antialiased line rasterizer.
+    float crossCoverage = clamp(
+      (uLaserLine.y + uLaserLine.z * 0.5 - abs(vTexCoord.y)) / uLaserLine.z, 0.0, 1.0);
+    float endCoverage = clamp(
+      min(vTexCoord.x, uLaserLine.x - vTexCoord.x) / uLaserLine.z + 0.5, 0.0, 1.0);
+    float weight = clamp(crossCoverage * endCoverage * uLaserLine.w, 0.0, 1.0);
+    float t = weight * 2.0 - 1.0;
+    color = vec4(vColor.rgb, vColor.a * (t * t * t + 1.0) * 0.5);
+  } else if (uTextureMode == 0) {
     color = texture(uTexture, vTexCoord);
   } else {
     int paletteIndex = int(round(texture(uTexture, vTexCoord).r * 255.0));
@@ -127,8 +141,8 @@ void main() {
     }
   }
 
-  color *= vColor;
-  if (color.a < 0.01) {
+  if (uTextureMode != 2) color *= vColor;
+  if (color.a < (uTextureMode == 2 ? 1.0 / 255.0 : 0.01)) {
     discard;
   }
 
@@ -201,6 +215,7 @@ void Renderer2D::initialize(const int viewportWidth, const int viewportHeight) {
   textureUniform_ = glGetUniformLocationPtr(program_, "uTexture");
   paletteUniform_ = glGetUniformLocationPtr(program_, "uPaletteTexture");
   textureModeUniform_ = glGetUniformLocationPtr(program_, "uTextureMode");
+  laserLineUniform_ = glGetUniformLocationPtr(program_, "uLaserLine");
   enableRemapUniform_ = glGetUniformLocationPtr(program_, "uEnableRemap");
   remapColorUniform_ = glGetUniformLocationPtr(program_, "uRemapColor");
   logicalCoordTextureUniform_ = glGetUniformLocationPtr(program_, "uLogicalCoordTexture");
@@ -386,6 +401,37 @@ void Renderer2D::draw(const GLenum primitiveMode,
                vertexCount);
 }
 
+void Renderer2D::drawLaserLine(const RenderVertex& start, const RenderVertex& end,
+                              const float width, const float intensity) {
+  ensureInitialized();
+  // Coverage belongs to a framebuffer pixel, even when the world is zoomed.
+  constexpr float pixelSize = 1.f;
+  const float dx = end.x - start.x, dy = end.y - start.y;
+  const float length = std::hypot(dx, dy);
+  if (length < 0.001f || width <= 0 || intensity <= 0) return;
+  const float ux = dx / length, uy = dy / length;
+  const float radius = (width + pixelSize) * 0.5f, cap = pixelSize * 0.5f;
+  const float dz = (end.z - start.z) * cap / length;
+  const auto corner = [](RenderVertex vertex, float x, float y, float z, float u, float v) {
+    vertex.x = x; vertex.y = y; vertex.z = z;
+    vertex.u = u; vertex.v = v;
+    return vertex;
+  };
+  const auto a = corner(start, start.x - ux*cap + uy*radius, start.y - uy*cap - ux*radius,
+                        start.z - dz, -cap, -radius);
+  const auto b = corner(end, end.x + ux*cap + uy*radius, end.y + uy*cap - ux*radius,
+                        end.z + dz, length + cap, -radius);
+  const auto c = corner(end, end.x + ux*cap - uy*radius, end.y + uy*cap + ux*radius,
+                        end.z + dz, length + cap, radius);
+  const auto d = corner(start, start.x - ux*cap - uy*radius, start.y - uy*cap + ux*radius,
+                        start.z - dz, -cap, radius);
+  const std::array vertices{a, b, c, a, c, d};
+  glUseProgramPtr(program_);
+  glUniform4fPtr(laserLineUniform_, length, width*0.5f, pixelSize, std::clamp(intensity, 0.f, 1.f));
+  drawInternal(GL_TRIANGLES, whiteTexture_, 0, UiTextureColorMode::Rgba, UiTexturePaletteKind::None,
+               false, nullptr, vertices.data(), vertices.size(), true);
+}
+
 void Renderer2D::setIndexedPalettes(const Palette& unitPalette, const Palette& terrainPalette) {
   ensureInitialized();
   uploadPaletteTexture(unitPaletteTexture_,
@@ -414,7 +460,8 @@ void Renderer2D::drawInternal(const GLenum primitiveMode,
                               const bool paletteRemap,
                               const LogicalDepthParams* logicalDepth,
                               const RenderVertex* vertices,
-                              const std::size_t vertexCount) {
+                              const std::size_t vertexCount,
+                              const bool laserLine) {
   ensureInitialized();
   glUseProgramPtr(program_);
   glBindVertexArrayPtr(vao_);
@@ -427,7 +474,7 @@ void Renderer2D::drawInternal(const GLenum primitiveMode,
   glActiveTexture(GL_TEXTURE0);
   glBindTexture(GL_TEXTURE_2D, texture);
 
-  glUniform1iPtr(textureModeUniform_, colorMode == UiTextureColorMode::IndexedPalette ? 1 : 0);
+  glUniform1iPtr(textureModeUniform_, laserLine ? 2 : colorMode == UiTextureColorMode::IndexedPalette ? 1 : 0);
   glUniform1iPtr(enableRemapUniform_, paletteRemap ? 1 : 0);
   glUniform4fPtr(remapColorUniform_,
                  remapColor_.r / 255.0f,
@@ -476,7 +523,9 @@ void Renderer2D::drawInternal(const GLenum primitiveMode,
   }
 
   glActiveTexture(GL_TEXTURE2);
-  glBindTexture(GL_TEXTURE_2D, useLogicalDepth ? logicalCoordTexture : 0);
+  // Keep every active sampler bound to a complete texture, even when its
+  // uniform-controlled branch is disabled (macOS validates these bindings).
+  glBindTexture(GL_TEXTURE_2D, useLogicalDepth ? logicalCoordTexture : whiteTexture_);
 
   glDrawArrays(primitiveMode, 0, static_cast<GLsizei>(vertexCount));
 

@@ -74,12 +74,14 @@ struct ArtDefinition {
   bool productionSplit = false;
   bool deferOverUnit = false;
   int animationFrameLimit = 0;
+  bool garrisonFrames=false;
+  bool wall=false;
 };
 
 class ArtIni {
 public:
   static ArtIni load(const std::filesystem::path& path);
-  static ArtIni fromDocument(ra2::IniDocument document, ra2::IniDocument replica = {});
+  static ArtIni fromDocument(ra2::IniDocument document, ra2::IniDocument replica = {}, ra2::IniDocument rules = {});
   [[nodiscard]] int animationFrameLimit(std::string_view id) const;
   [[nodiscard]] std::string field(std::string_view id, std::string_view key) const;
 
@@ -90,4 +92,6 @@ public:
 private:
   ra2::IniDocument document_;
   ra2::IniDocument replica_;
+  ra2::IniDocument rules_;
+  std::string buildingArtId(std::string_view id) const;
 };

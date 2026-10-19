@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 
 #include "building_system.h"
 #include "renderer2d.h"
@@ -65,7 +66,8 @@ void drawPlacementPreview(Renderer2D& renderer,
                           const MapGrid& map,
                           Vec2 origin,
                           float tileWidth,
-                          float tileHeight);
+                          float tileHeight,
+                          std::optional<bool> allowed=std::nullopt);
 
 // 在世界层绘制建筑实例：
 // - 建造动画

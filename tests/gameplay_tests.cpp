@@ -6,15 +6,90 @@
 #include "presentation/building_health.h"
 #include "foundation.h"
 #include "iso_world.h"
+#include "demo_scene.h"
+#include "interaction/unit_selection.h"
 
 #include <cmath>
 #include <iostream>
 #include <tuple>
 
+namespace {
+void sidebarPowerTransitions() {
+  SidebarState state;state.powerProduced=200;state.powerConsumed=100;state.credits=10000;
+  updateSidebarState(state,1000);
+  auto& display=state.powerAnimation;
+  require(display.initialized && display.produced==200 && display.consumed==100 && display.pulse==0,
+          "Sidebar did not initialize from actual power without a fake transition");
+  updateSidebarState(state,1100);
+  require(display.pulse==0,"Unchanged initial power flashed");
+  state.powerProduced=400;updateSidebarState(state,1200);
+  require(display.produced==200 && display.consumed==100 && display.pulse>0,"Power change jumped to its target");
+  state.credits=0;updateSidebarState(state,1440);
+  require(display.produced>200 && display.produced<400 && display.consumed==100 && display.started==1200,
+          "Money changes restarted power animation or output animation moved the load");
+  const auto halfway=display.produced;
+  updateSidebarState(state,1680);
+  require(display.produced==400 && display.consumed==100,"Power animation did not reach its target");
+  state.powerConsumed=450;updateSidebarState(state,1800);updateSidebarState(state,2040);
+  require(display.produced==400 && display.consumed>100 && display.consumed<450,
+          "Increasing load failed to animate independently from production");
+  const auto intermediate=display.consumed;
+  state.powerProduced=0;state.powerConsumed=0;updateSidebarState(state,2040);
+  require(display.produced==400 && display.consumed==intermediate,"Retargeting in flight caused a visual jump");
+  updateSidebarState(state,2200);
+  require(display.produced>0 && display.produced<400 && display.consumed>0 && display.consumed<intermediate,
+          "Power removal overshot or skipped the downward transition");
+  updateSidebarState(state,2800);
+  require(display.produced==0 && display.consumed==0 && display.scale>=400 && display.pulse==0,
+          "Empty power network retained power or an invalid display scale");
+  state.powerOutage=true;updateSidebarState(state,2900);
+  require(display.outage && display.pulse>0 && display.produced==0,"Outage status failed to refresh the power meter");
+
+  SidebarState regular,wrapped;
+  for(auto* item:{&regular,&wrapped}){item->powerProduced=200;item->powerConsumed=100;}
+  updateSidebarState(regular,0);updateSidebarState(wrapped,UINT32_MAX-200);
+  regular.powerProduced=wrapped.powerProduced=400;
+  updateSidebarState(regular,100);updateSidebarState(wrapped,UINT32_MAX-100);
+  for(std::uint32_t t=116;t<340;t+=16)updateSidebarState(regular,t);
+  updateSidebarState(regular,340);updateSidebarState(wrapped,139);
+  require(std::abs(regular.powerAnimation.produced-halfway)<1e-8 &&
+          std::abs(regular.powerAnimation.produced-wrapped.powerAnimation.produced)<1e-8,
+          "Power animation depends on refresh rate or breaks when the UI timer wraps");
+  state.powerProduced=state.powerConsumed=INT32_MAX;updateSidebarState(state,3000);updateSidebarState(state,4000);
+  require(std::isfinite(display.scale) && display.scale>display.produced && display.consumed==INT32_MAX,
+          "Large power values overflowed the meter scale");
+}
+
+void mixedSidebarProduction(const ra2::DefinitionRegistry& definitions) {
+  for(const auto tab:{SidebarTab::Infantry,SidebarTab::Vehicles})for(const auto side:kAllBuildFactions) {
+    const bool infantry=tab==SidebarTab::Infantry,allied=side==BuildFaction::Allied;
+    const auto icons=makeSidebarPanel(tab);
+    const auto entry=std::find_if(icons.begin(),icons.end(),[&](const auto& icon) {
+      return icon.id==(infantry?"engnicon":"mcvicon") && icon.faction==side;
+    });
+    require(entry!=icons.end(),"Combined sidebar lost a shared-cameo faction variant");
+    const auto* requested=definitions.sidebarUnit(entry->id,allied?"ALLIED":"SOVIET");
+    require(requested && requested->id==(infantry?(allied?"ENGINEER":"SENGINEER"):(allied?"AMCV":"SMCV")),
+            "Combined sidebar resolved a shared cameo to the wrong unit");
+    ra2::World world(definitions);
+    const auto a=world.spawn(infantry?"GAPILE":"GAWEAP",{}),s=world.spawn(infantry?"NAHAND":"NAWEAP",{8,0});
+    ra2::EntityId factory=0;
+    for(const auto& entity:world.snapshot())if(definitions.sidebarFactoryMatches(definitions.unit(entity.type),*requested,allied?"ALLIED":"SOVIET"))factory=entity.id;
+    require(factory && factory==(allied?a:s),"Mixed sidebar selected the other faction's production building");
+    world.enqueue({1,0,1,ra2::CommandKind::Produce,factory,0,{},requested->id});
+    for(int i=0;i<360;++i)world.step();
+    bool produced=false;for(const auto& entity:world.snapshot())produced|=entity.type==requested->id && !entity.exitFactory;
+    require(produced,"Mixed sidebar request failed to produce/exit the selected unit");
+  }
+}
+}
+
 int main(int argc, char** argv) {
   try {
     require(argc == 2, "Expected settings path");
     const auto definitions = fastProductionFixture(argv[1]);
+    sidebarPowerTransitions();
+    mixedSidebarProduction(definitions);
     // Golden placement examples: every rectangular Foundation starts at the
     // specified cell; dimensions never change the common SHP drawing origin.
     for (const auto size : {FoundationSize{1,1}, {2,2}, {3,2}, {2,3}, {3,3}, {4,3}, {4,4}, {5,3}, {1,2}, {3,4}}) {
@@ -85,7 +160,31 @@ int main(int argc, char** argv) {
               "Deployment skipped or stalled in the middle of its SHP sequence");
       for(int i=definitions.profile().buildupFrames/2;i<definitions.profile().buildupFrames;++i) deployment.step();
       require(ra2::makeWorldView(deployment,definitions,id).buildings[0].state==BuildingState::Complete,"Deployment never completed");
-      deployment.enqueue({deployment.tick()+1,0,2,ra2::CommandKind::Deploy,id}); deployment.step();
+      // The roof lies outside the ground footprint. Picking its visible pixels
+      // must retain the deployed vehicle identity so the UI can issue Undeploy.
+      const auto root=std::filesystem::path(argv[1]).parent_path();
+      const bool allied=std::string_view(mcvType)=="AMCV";
+      const auto shp=ShpTsFile::load(root/"buildings"/(allied?"allied/gacnst/gacnst.shp":"soviet/nacnst/nacnst.shp"));
+      BuildingAsset asset;asset.id=start.assetId;asset.foundation={4,4};asset.completeFrame=shp.decodeFrame(0);
+      asset.completeTexture.width=asset.completeFrame.width;asset.completeTexture.height=asset.completeFrame.height;
+      asset.completeTexture.rgba=shp.decodeFrameRgba(0,Palette::load(root/"palettes/ui/palette.pal"));
+      BuildingAssetMap assets;assets.emplace(asset.id,std::move(asset));
+      visual=ra2::makeWorldView(deployment,definitions,id);
+      const auto& frame=assets.at(start.assetId).completeFrame;
+      const Vec2 origin{640,360};const auto drawCenter=buildingDrawCenter(start.placement,origin,60,30);
+      const auto topLeft=buildingSpriteTopLeft(drawCenter,frame.width,frame.height);
+      std::optional<std::size_t> roofHit;
+      for(int y=0;y<frame.height && !roofHit;++y)for(int x=0;x<frame.width && !roofHit;++x)if(frame.indices[y*frame.width+x]) {
+        const Vec2 point{topLeft.x+x+.5f,topLeft.y+y+.5f};const auto tile=screenToIso(point.x,point.y,origin,60,30);
+        if(tile.x>=-1 && tile.x<=2 && tile.y>=-1 && tile.y<=2)continue;
+        roofHit=hitTestBuildingAtPoint(assets,visual.buildings,point.x,point.y,origin,60,30);
+        require(roofHit==0,"Construction yard roof cannot be selected outside its footprint");
+      }
+      require(roofHit.has_value(),"Construction yard fixture has no roof pixels outside its footprint");
+      require(!hitTestBuildingAtPoint(assets,visual.buildings,topLeft.x,topLeft.y,origin,60,30),"Transparent building canvas intercepted a click");
+      ra2::UnitSelection selected;selected.selectOne(visual.buildings[*roofHit].entityId);std::uint64_t sequence=1;
+      require(ra2::issueSelectionCommand(deployment,definitions,selected,ra2::CommandKind::Deploy,{},0,sequence)==1,"Selected construction yard rejected packing");
+      deployment.step();
       visual = ra2::makeWorldView(deployment,definitions,id);
       require(visual.buildings[0].state==BuildingState::Packing &&
               buildingBuildupFrameIndex(visual.buildings[0],30,ra2::gameMilliseconds(deployment.tick()))==29,

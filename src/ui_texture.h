@@ -27,4 +27,7 @@ struct UiTexture {
   UiTextureColorMode colorMode = UiTextureColorMode::Rgba;
   UiTexturePaletteKind paletteKind = UiTexturePaletteKind::None;
   bool paletteRemap = false;
+  // Optional CPU hit mask, one bit per pixel. Indexed building textures keep
+  // this instead of an RGBA copy so picking can follow their visible silhouette.
+  std::vector<std::uint8_t> hitMask{};
 };

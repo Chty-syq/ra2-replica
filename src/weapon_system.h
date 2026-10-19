@@ -17,6 +17,7 @@ struct WeaponVisualAssets {
   std::vector<UiTexture> explosionFrames;
   std::vector<UiTexture> explosionLargeFrames;
   std::map<std::string,std::vector<UiTexture>> animations;
+  std::map<std::string,std::vector<UiTexture>> projectileFrames;
 };
 namespace ra2 { class DefinitionRegistry; }
 
@@ -53,6 +54,7 @@ struct ProjectileInstance {
   bool simulated = false;
   Vec2 logicalPosition{}, velocityLogical{};
   float heightLeptons = 0, verticalVelocityLeptons = 0;
+  std::string image;
 };
 
 struct CombatEffectInstance {
@@ -66,6 +68,9 @@ struct CombatEffectInstance {
   std::string animation;
   int animationFrame = -1;
   float alpha = 1.0f;
+  int yDrawOffset=0;
+  bool groundLayer=false;
+  std::optional<std::uint32_t> remapOwner;
 };
 
 [[nodiscard]] WeaponVisualAssets loadWeaponVisualAssets(const std::filesystem::path& effectsRoot,
@@ -97,4 +102,5 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
                                      const std::vector<CombatEffectInstance>& effects,
                                      Vec2 origin,
                                      float tileWidth,
-                                     float tileHeight);
+                                     float tileHeight,
+                                     Rgba friendly={24,96,208,255},Rgba enemy={208,32,24,255});

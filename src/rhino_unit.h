@@ -68,6 +68,14 @@ struct RhinoUnitState {
   std::uint64_t exitFactoryId = 0;
   std::uint32_t owner = 0;
   std::string typeId;
+  int turretVariant=0;
+  bool commandable=true,airborne=false,aircraft=false;
+  float groundHeightLeptons=0;
+  int animationFrame=0;
+  bool frozen=false;
+  bool submerged=false;float opacity=1;
+  std::string disguiseImage;
+  bool disguiseVisible=false, disguiseTargetable=true;
   VehicleUnitKind kind = VehicleUnitKind::Rhino;
   Vec2 tilePosition{7.0f, 10.0f};
   TileCoord occupiedCell{7, 10};

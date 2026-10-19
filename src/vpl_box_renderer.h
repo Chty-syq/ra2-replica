@@ -38,6 +38,11 @@ struct VplBoxRendererState {
   float shadowDepthBias01 = 0.0010f;
   VoxelNormalTableSelection normalTableSelection = VoxelNormalTableSelection::AutoFromVxl;
   Rgba remapColor{252, 0, 0, 255};
+  int animationFrame=0,shadowIndex=-1;
+  float shadowScreenOffsetY=0,airDepthOffset=0;
+  bool remapEnabled=true;
+  std::array<float,3> objectTint{1,1,1};
+  float objectOpacity=1;
   Rgba backgroundColor{0, 0, 255, 255};
 };
 

@@ -361,27 +361,49 @@ WeaponVisualAssets loadWeaponVisualAssets(const std::filesystem::path& effectsRo
   assets.gunfireFrames = loadRgbaShpFrames(effectsRoot / "muzzle" / "gunfire.shp", animationPalette);
   assets.explosionFrames = loadRgbaShpFrames(effectsRoot / "explosions" / "s_clsn16.shp", animationPalette);
   assets.explosionLargeFrames = loadRgbaShpFrames(effectsRoot / "explosions" / "s_clsn22.shp", animationPalette);
+  const auto missile=effectsRoot/"projectiles"/"dragon.shp";
+  if(std::filesystem::is_regular_file(missile)) {
+    const auto shp=ShpTsFile::load(missile);
+    for(std::size_t i=0;i<shp.frameCount();++i)assets.projectileFrames["DRAGON"].push_back(uploadIndexedFrame(shp.decodeFrame(i)));
+  }
+  const auto medusa=effectsRoot/"projectiles"/"medusa.shp";
+  if(std::filesystem::is_regular_file(medusa)) {
+    const auto shp=ShpTsFile::load(medusa);
+    // Native MEDUSA has 32 directions followed by 32 empty shadow entries.
+    if(shp.frameCount()!=64)throw std::runtime_error("Expected original MEDUSA directional SHP");
+    for(std::size_t i=0;i<32;++i)assets.projectileFrames["MEDUSA"].push_back(uploadIndexedFrame(shp.decodeFrame(i)));
+  }
   if (definitions) {
     std::set<std::string> wanted;
+    for(const auto& [id,animation]:definitions->effectAnimations()){(void)id;wanted.insert(animation.image);}
     for (const auto& [id,type]:definitions->units()) {
       (void)id;
-      if (type.primary.empty() || !definitions->rules().contains(type.primary)) continue;
-      const auto& weapon=definitions->weapon(type.primary);
+      auto slots=type.weaponSlots;if(!type.primary.empty())slots.push_back(type.primary);if(!type.secondary.empty())slots.push_back(type.secondary);
+      for(const auto& slot:slots) {
+      if(slot.empty() || !definitions->rules().contains(slot))continue;
+      const auto& weapon=definitions->weapon(slot);
       if (!weapon.supported) continue;
-      if (!weapon.muzzleAnimation.empty()) wanted.insert(definitions->effectAnimation(weapon.muzzleAnimation).image);
+      for(const auto& name:weapon.muzzleAnimations) wanted.insert(definitions->effectAnimation(name).image);
       for (const auto& name:definitions->warhead(weapon.warhead).animations) wanted.insert(definitions->effectAnimation(name).image);
+      }
     }
     for (const auto* name:{"GUNFIRE","S_CLSN16","S_CLSN22"}) wanted.erase(name);
     for (const auto& file:std::filesystem::recursive_directory_iterator(effectsRoot)) {
       const auto name=ra2::canonicalId(file.path().stem().string());
-      if (file.is_regular_file() && ra2::canonicalId(file.path().extension().string())==".SHP" && wanted.contains(name))
-        assets.animations.emplace(name,loadRgbaShpFrames(file.path(),animationPalette));
+      if (file.is_regular_file() && ra2::canonicalId(file.path().extension().string())==".SHP" && wanted.contains(name)) {
+        const bool unitPalette=std::any_of(definitions->effectAnimations().begin(),definitions->effectAnimations().end(),[&](const auto& entry){return entry.second.image==name && entry.second.unitPalette;});
+        if(unitPalette) {
+          const auto shp=ShpTsFile::load(file.path());auto& frames=assets.animations[name];
+          for(std::size_t i=0;i<shp.frameCount();++i){auto frame=uploadIndexedFrame(shp.decodeFrame(i));frame.paletteRemap=true;frames.push_back(std::move(frame));}
+        } else assets.animations.emplace(name,loadRgbaShpFrames(file.path(),animationPalette));
+      }
     }
   }
   return assets;
 }
 
 void destroyWeaponVisualAssets(WeaponVisualAssets& assets) {
+  for(auto& [id,frames]:assets.projectileFrames) {(void)id;destroyTextures(frames);}assets.projectileFrames.clear();
   destroyTexture(assets.shell120mm);
   destroyTextures(assets.gunfireFrames);
   destroyTextures(assets.explosionFrames);
@@ -521,8 +543,9 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
                                      const std::vector<CombatEffectInstance>& effects,
                                      const Vec2 origin,
                                      const float tileWidth,
-                                     const float tileHeight) {
+                                     const float tileHeight,Rgba friendly,Rgba enemy) {
   for (const auto& projectile : projectiles) {
+    if(ra2::canonicalId(projectile.image)=="SUBT")continue;
     const float elapsedRulesFrames =
       std::clamp(projectile.elapsedSeconds * std::max(1.0f, projectile.rulesFramesPerSecond),
                  0.0f,
@@ -550,15 +573,23 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
     const float screenAngle = projectile.simulated?
       std::atan2(velocityScreen.y-leptonHeightToPixels(projectile.verticalVelocityLeptons,tileHeight),velocityScreen.x):
       std::atan2(targetScreen.y-startScreen.y,targetScreen.x-startScreen.x);
-    const float width = std::max(6.0f, static_cast<float>(assets.shell120mm.width));
-    const float height = std::max(3.0f, static_cast<float>(assets.shell120mm.height));
+    const UiTexture* texture=&assets.shell120mm;
+    float rotation=screenAngle;
+    if(const auto frames=assets.projectileFrames.find(ra2::canonicalId(projectile.image));frames!=assets.projectileFrames.end() && !frames->second.empty()) {
+      // Original projectiles store clockwise compass facings, starting at north.
+      const auto frame=static_cast<int>(std::lround((screenAngle+kPi*.5f)*frames->second.size()/kTwoPi));
+      const auto count=static_cast<int>(frames->second.size());texture=&frames->second[(frame%count+count)%count];rotation=0;
+    }
+    const float width = std::max(6.0f, static_cast<float>(texture->width));
+    const float height = std::max(3.0f, static_cast<float>(texture->height));
     const float depth = std::clamp(depthFromLogicalCenter(logical, tileWidth, tileHeight) - 0.00045f,
                                    0.001f,
                                    0.999f);
-    drawTexturedQuad(renderer, assets.shell120mm, screen, width, height, screenAngle, depth);
+    drawTexturedQuad(renderer, *texture, screen, width, height, rotation, depth);
   }
 
   for (const auto& effect : effects) {
+    if(effect.remapOwner)renderer.setRemapColor(*effect.remapOwner?enemy:friendly);
     const auto extra=assets.animations.find(effect.animation);
     if (!effect.animation.empty() && effect.animation!="GUNFIRE" && effect.animation!="S_CLSN16" && effect.animation!="S_CLSN22" && extra==assets.animations.end()) continue;
     const auto& frames = extra!=assets.animations.end()?extra->second:
@@ -577,8 +608,9 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
     Vec2 screen =
       isoToScreenFloat(effect.logicalPosition.x, effect.logicalPosition.y, origin, tileWidth, tileHeight);
     screen.y -= leptonHeightToPixels(effect.heightLeptons, tileHeight);
+    screen.y += effect.yDrawOffset;
     const float depth =
-      std::clamp(depthFromLogicalCenter(effect.logicalPosition, tileWidth, tileHeight) - 0.0003f,
+      std::clamp(depthFromLogicalCenter(effect.logicalPosition, tileWidth, tileHeight) + (effect.groundLayer?0.000025f:-0.0003f),
                  0.001f,
                  0.999f);
     drawTexturedQuad(renderer,
@@ -590,4 +622,5 @@ void drawWeaponProjectilesAndEffects(Renderer2D& renderer,
                      depth,
                      effect.alpha);
   }
+  renderer.setRemapColor(friendly);
 }

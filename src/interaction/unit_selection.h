@@ -1,6 +1,7 @@
 #pragma once
 #include "simulation/world.h"
 #include "rhino_unit.h"
+#include "presentation/unit_view.h"
 #include <optional>
 #include <span>
 
@@ -36,6 +37,9 @@ public:
   void prune(std::span<const EntitySnapshot> entities);
   void selectBox(SelectionRect rectangle,std::span<const RhinoUnitState> vehicles,
                  Vec2 origin,float tileWidth,float tileHeight,bool additive=false,std::uint32_t owner=0);
+  void selectBox(SelectionRect rectangle,std::span<const SelectableUnit> units,
+                 Vec2 origin,float tileWidth,float tileHeight,bool additive=false,std::uint32_t owner=0);
+  void toggleUnit(EntityId id,std::span<const SelectableUnit> units,std::uint32_t owner=0);
   void toggleVehicle(EntityId id,std::span<const RhinoUnitState> vehicles,std::uint32_t owner=0);
 private:
   void retainVehicles(std::span<const RhinoUnitState> vehicles,std::uint32_t owner);

@@ -74,6 +74,9 @@ struct GlHandles {
   GLint transformRowsLocation = -1;
   GLint lightDirectionLocation = -1;
   GLint remapColorLocation = -1;
+  GLint objectTintLocation = -1;
+  GLint objectOpacityLocation = -1;
+  GLint remapEnabledLocation = -1;
   GLint modelOffsetLocation = -1;
   GLint scaleFactorLocation = -1;
   GLint canvasInfoLocation = -1;
@@ -135,6 +138,9 @@ layout(location = 2) in vec2 aVoxelMeta;
 uniform vec4 uTransformRows[4];
 uniform vec3 uLightDir;
 uniform vec3 uRemapColor;
+uniform bool uRemapEnabled;
+uniform vec3 uObjectTint;
+uniform float uObjectOpacity;
 uniform vec3 uModelOffset;
 uniform float uScaleFactor;
 uniform vec3 uCanvasInfo;
@@ -223,7 +229,7 @@ void main() {
 
   vec4 paletteColor = texelFetch(uPaletteTexture, ivec2(int(realColorIndex), 0), 0);
   vec4 realColor = vec4(paletteColor.rgb, 1.0);
-  if (realColorIndex >= 16u && realColorIndex < 32u) {
+  if (uRemapEnabled && realColorIndex >= 16u && realColorIndex < 32u) {
     float stage = float(realColorIndex - 16u);
     vec3 hsv = RGBtoHSV(uRemapColor);
     hsv.y = hsv.y * sin(stage * kPi / 67.5 + kPi / 3.6);
@@ -241,7 +247,7 @@ void main() {
   projected.z = uDepthParams.x + projected.z * uDepthParams.y;
 
   gl_Position = vec4(projected.xy, projected.z * 2.0 - 1.0, 1.0);
-  vColor = realColor * (uCanvasInfo.z + 1.0);
+  vColor = realColor * vec4(uObjectTint,uObjectOpacity) * (uCanvasInfo.z + 1.0);
 }
 )GLSL";
 
@@ -736,6 +742,9 @@ void VplBoxRenderer::initialize(SDL_Window* window) {
   impl_->gl.transformRowsLocation = glGetUniformLocationPtr(impl_->gl.program, "uTransformRows[0]");
   impl_->gl.lightDirectionLocation = glGetUniformLocationPtr(impl_->gl.program, "uLightDir");
   impl_->gl.remapColorLocation = glGetUniformLocationPtr(impl_->gl.program, "uRemapColor");
+  impl_->gl.objectTintLocation = glGetUniformLocationPtr(impl_->gl.program, "uObjectTint");
+  impl_->gl.objectOpacityLocation = glGetUniformLocationPtr(impl_->gl.program, "uObjectOpacity");
+  impl_->gl.remapEnabledLocation = glGetUniformLocationPtr(impl_->gl.program, "uRemapEnabled");
   impl_->gl.modelOffsetLocation = glGetUniformLocationPtr(impl_->gl.program, "uModelOffset");
   impl_->gl.scaleFactorLocation = glGetUniformLocationPtr(impl_->gl.program, "uScaleFactor");
   impl_->gl.canvasInfoLocation = glGetUniformLocationPtr(impl_->gl.program, "uCanvasInfo");
@@ -984,14 +993,15 @@ void drawRhinoPartSections(const RhinoPartData& part,
                            const Matrix4f& world,
                            const float prerotation,
                            const float offset,
-                           const GLint transformRowsLocation) {
+                           const GLint transformRowsLocation,int animationFrame=0,int sectionFilter=-1) {
   if (part.hva.sectionCount() == 0 || part.hva.frameCount() == 0) {
     return;
   }
 
-  const auto realFrame = static_cast<std::size_t>(0);
+  const auto realFrame = static_cast<std::size_t>(std::max(0,animationFrame))%part.hva.frameCount();
   const auto sectionCount = std::min(part.sections.size(), part.hva.sectionCount());
   for (std::size_t sectionIndex = 0; sectionIndex < sectionCount; ++sectionIndex) {
+    if(sectionFilter>=0 && int(sectionIndex)!=sectionFilter)continue;
     const auto& section = part.sections[sectionIndex];
     if (section.instanceCount <= 0) {
       continue;
@@ -1041,6 +1051,9 @@ void VplBoxRenderer::renderToScreen(const VplBoxRendererState& state,
                  state.lightDirection[0],
                  state.lightDirection[1],
                  state.lightDirection[2]);
+  glUniform1iPtr(impl_->gl.remapEnabledLocation,state.remapEnabled?1:0);
+  glUniform3fPtr(impl_->gl.objectTintLocation,state.objectTint[0],state.objectTint[1],state.objectTint[2]);
+  glUniform1fPtr(impl_->gl.objectOpacityLocation,state.objectOpacity);
   glUniform3fPtr(impl_->gl.remapColorLocation,
                  static_cast<float>(state.remapColor.r) / 255.0f,
                  static_cast<float>(state.remapColor.g) / 255.0f,
@@ -1066,9 +1079,9 @@ void VplBoxRenderer::renderToScreen(const VplBoxRendererState& state,
   bindPaletteAndVplTextures(impl_->gl);
 
   glBindVertexArrayPtr(impl_->gl.vao);
-  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.transformRowsLocation);
-  drawRhinoPartSections(impl_->turret, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation);
-  drawRhinoPartSections(impl_->barrel, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation);
+  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.transformRowsLocation,state.animationFrame);
+  drawRhinoPartSections(impl_->turret, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation,state.animationFrame);
+  drawRhinoPartSections(impl_->barrel, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation,state.animationFrame);
 
   glBindBufferPtr(GL_ARRAY_BUFFER, 0);
   glBindVertexArrayPtr(0);
@@ -1102,6 +1115,9 @@ UiTexture VplBoxRenderer::renderToTexture(const VplBoxRendererState& state, cons
                  state.lightDirection[0],
                  state.lightDirection[1],
                  state.lightDirection[2]);
+  glUniform1iPtr(impl_->gl.remapEnabledLocation,state.remapEnabled?1:0);
+  glUniform3fPtr(impl_->gl.objectTintLocation,state.objectTint[0],state.objectTint[1],state.objectTint[2]);
+  glUniform1fPtr(impl_->gl.objectOpacityLocation,state.objectOpacity);
   glUniform3fPtr(impl_->gl.remapColorLocation,
                  static_cast<float>(state.remapColor.r) / 255.0f,
                  static_cast<float>(state.remapColor.g) / 255.0f,
@@ -1127,9 +1143,9 @@ UiTexture VplBoxRenderer::renderToTexture(const VplBoxRendererState& state, cons
   bindPaletteAndVplTextures(impl_->gl);
 
   glBindVertexArrayPtr(impl_->gl.vao);
-  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.transformRowsLocation);
-  drawRhinoPartSections(impl_->turret, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation);
-  drawRhinoPartSections(impl_->barrel, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation);
+  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.transformRowsLocation,state.animationFrame);
+  drawRhinoPartSections(impl_->turret, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation,state.animationFrame);
+  drawRhinoPartSections(impl_->barrel, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation,state.animationFrame);
 
   glBindBufferPtr(GL_ARRAY_BUFFER, 0);
   glBindVertexArrayPtr(0);
@@ -1191,7 +1207,7 @@ void VplBoxRenderer::renderShadowInWorld(const VplBoxRendererState& state,
                  state.shadowAlpha);
 
   glBindVertexArrayPtr(impl_->gl.vao);
-  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.shadowTransformRowsLocation);
+  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.shadowTransformRowsLocation,state.animationFrame,state.shadowIndex);
   glBindBufferPtr(GL_ARRAY_BUFFER, 0);
   glBindVertexArrayPtr(0);
 
@@ -1229,6 +1245,9 @@ void VplBoxRenderer::renderInWorld(const VplBoxRendererState& state,
                  state.lightDirection[0],
                  state.lightDirection[1],
                  state.lightDirection[2]);
+  glUniform1iPtr(impl_->gl.remapEnabledLocation,state.remapEnabled?1:0);
+  glUniform3fPtr(impl_->gl.objectTintLocation,state.objectTint[0],state.objectTint[1],state.objectTint[2]);
+  glUniform1fPtr(impl_->gl.objectOpacityLocation,state.objectOpacity);
   glUniform3fPtr(impl_->gl.remapColorLocation,
                  static_cast<float>(state.remapColor.r) / 255.0f,
                  static_cast<float>(state.remapColor.g) / 255.0f,
@@ -1252,9 +1271,9 @@ void VplBoxRenderer::renderInWorld(const VplBoxRendererState& state,
   bindPaletteAndVplTextures(impl_->gl);
 
   glBindVertexArrayPtr(impl_->gl.vao);
-  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.transformRowsLocation);
-  drawRhinoPartSections(impl_->turret, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation);
-  drawRhinoPartSections(impl_->barrel, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation);
+  drawRhinoPartSections(impl_->body, world, bodyRotation, 0.0f, impl_->gl.transformRowsLocation,state.animationFrame);
+  drawRhinoPartSections(impl_->turret, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation,state.animationFrame);
+  drawRhinoPartSections(impl_->barrel, world, turretRotation, turretOffset, impl_->gl.transformRowsLocation,state.animationFrame);
 
   glBindBufferPtr(GL_ARRAY_BUFFER, 0);
   glBindVertexArrayPtr(0);

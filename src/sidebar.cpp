@@ -1,10 +1,14 @@
 #include "sidebar.h"
+#include "config/definitions.h"
+#include "building_system.h"
 
 #include "shp_ts.h"
+#include <imgui.h>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -18,6 +22,38 @@ constexpr float kPowerPanelWidth = 17.0f;
 constexpr float kRowHeight = 50.0f;
 constexpr float kIconWidth = 60.0f;
 constexpr float kIconHeight = 48.0f;
+constexpr std::uint32_t kPowerTransitionMs = 480;
+constexpr std::uint32_t kPowerPulseMs = 720;
+
+double powerScale(const int produced,const int consumed) {
+  // Leave room above both readings; one common linear scale preserves their ratio.
+  return std::max(400.0,std::max(produced,consumed)*1.2);
+}
+
+int powerColorFrame(const SidebarState& state) {
+  if(state.powerOutage || state.powerProduced<state.powerConsumed)return 3;
+  return state.powerProduced*5LL<state.powerConsumed*6LL?2:1;
+}
+
+ImU32 powerTextColor(const SidebarState& state) {
+  switch(powerColorFrame(state)) {
+    case 3:return IM_COL32(255,112,96,255);
+    case 2:return IM_COL32(255,218,104,255);
+    default:return IM_COL32(142,242,144,255);
+  }
+}
+
+std::string creditText(const int credits) {
+  auto text=std::to_string(credits);
+  const int start=credits<0?1:0;
+  for(int i=static_cast<int>(text.size())-3;i>start;i-=3)text.insert(i,",");
+  return "$ "+text;
+}
+
+void shadowText(ImDrawList& draw,const ImVec2 position,const float size,const ImU32 color,const char* text) {
+  draw.AddText(ImGui::GetFont(),size,{position.x+1,position.y+1},IM_COL32(0,0,0,230),text);
+  draw.AddText(ImGui::GetFont(),size,position,color,text);
+}
 
 using FileIndex = std::unordered_map<std::string, std::filesystem::path>;
 
@@ -387,7 +423,7 @@ void forEachPanelIconName(const BuildFaction faction, const SidebarTab tab, Fn&&
           return;
         case SidebarTab::Defense:
           for (const auto* name : {
-                 "paraicon", "aparicon", "chroicon", "bolticon", "wallicon",
+                 "wallicon",
                  "pillicon", "samicon", "prisicon", "gapicon", "gcanicon",
                  "asaticon", "csphicon", "wethicon"
                }) {
@@ -425,15 +461,15 @@ void forEachPanelIconName(const BuildFaction faction, const SidebarTab tab, Fn&&
           return;
         case SidebarTab::Defense:
           for (const auto* name : {
-                 "nwalicon", "flakicon", "samicon", "tslaicon",
-                 "ironicon", "nukeicon", "npsiicon"
+                 "nwalicon", "plticon", "flakicon", "tslaicon",
+                 "ironicon", "msslicon", "psisicon"
                }) {
             fn(name);
           }
           return;
         case SidebarTab::Infantry:
           for (const auto* name : {
-                 "e1icon", "engnicon", "dogicon", "flkticon",
+                 "e2icon", "engnicon", "dogicon", "flkticon",
                  "ivanicon", "desoicon", "shkicon"
                }) {
             fn(name);
@@ -469,6 +505,7 @@ struct SidebarNode {
   SidebarClickAction action = SidebarClickAction::None;
   SidebarTab tab = SidebarTab::Base;
   std::string_view iconId{};
+  BuildFaction faction=BuildFaction::Allied;
   bool visible = true;
   std::vector<SidebarNode> children;
 };
@@ -590,38 +627,6 @@ SidebarNode buildPowerPanelNode(const SidebarAssets& assets, const int visibleRo
                               1.0f));
   }
 
-  const std::array<const char*, 42> powerPattern{{
-    "rd","ru","none","rd","ru","none","rd","ru","none","rd","ru","none",
-    "yd","yu","none","yd","yu","none","yd","yu","none","gd","gu","none",
-    "gd","gu","none","gd","gu","none","gd","gu","none","gd","gu","none",
-    "gd","gu","none","gd","gu","none"
-  }};
-
-  for (std::size_t i = 0; i < powerPattern.size(); ++i) {
-    const std::string_view code = powerPattern[i];
-    if (code == "none") {
-      continue;
-    }
-
-    const UiTexture* line = nullptr;
-    float v0 = 0.0f;
-    float v1 = 0.5f;
-    if (code.front() == 'r') {
-      line = &assets.powerLines[3];
-    } else if (code.front() == 'y') {
-      line = &assets.powerLines[2];
-    } else {
-      line = &assets.powerLines[1];
-    }
-    if (code.back() == 'd') {
-      v0 = 0.5f;
-      v1 = 1.0f;
-    }
-
-    const float lineY = static_cast<float>(visibleRows) * kRowHeight - 1.0f - static_cast<float>(i);
-    appendChild(powerPanel, makeImageNode(makeRect(5.0f, lineY, 12.0f, 1.0f), *line, 0.0f, v0, 1.0f, v1));
-  }
-
   return powerPanel;
 }
 
@@ -650,6 +655,8 @@ SidebarNode buildUnitPanelNode(const SidebarAssets& assets,
       SidebarNode iconNode = makeNode(makeRect(5.0f, 0.0f, kIconWidth, kIconHeight));
       iconNode.action = SidebarClickAction::ClickIcon;
       iconNode.iconId = icons[leftIndex].id;
+      iconNode.faction = icons[leftIndex].faction;
+      iconNode.tab = tab;
       appendChild(iconNode, makeImageNode(makeRect(0.0f, 0.0f, kIconWidth, kIconHeight), icons[leftIndex].texture));
       appendChild(rowNode, std::move(iconNode));
     }
@@ -659,6 +666,8 @@ SidebarNode buildUnitPanelNode(const SidebarAssets& assets,
       SidebarNode iconNode = makeNode(makeRect(68.0f, 0.0f, kIconWidth, kIconHeight));
       iconNode.action = SidebarClickAction::ClickIcon;
       iconNode.iconId = icons[rightIndex].id;
+      iconNode.faction = icons[rightIndex].faction;
+      iconNode.tab = tab;
       appendChild(iconNode, makeImageNode(makeRect(0.0f, 0.0f, kIconWidth, kIconHeight), icons[rightIndex].texture));
       appendChild(rowNode, std::move(iconNode));
     }
@@ -800,16 +809,53 @@ SidebarClickResult hitTestSidebarNode(const SidebarNode& node,
     result.action = node.action;
     result.tab = node.tab;
     result.iconId = std::string(node.iconId);
+    result.faction = node.faction;
   }
   return result;
 }
 }
 
+std::vector<SidebarIcon> makeSidebarPanel(const SidebarTab tab) {
+  std::array<std::vector<SidebarIcon>,2> sides;
+  for(std::size_t side=0;side<kAllBuildFactions.size();++side) {
+    const auto faction=kAllBuildFactions[side];
+    forEachPanelIconName(faction,tab,[&](const char* name) {
+      SidebarIcon icon;icon.id=name;icon.faction=faction;
+      sides[side].push_back(std::move(icon));
+    });
+  }
+  std::vector<SidebarIcon> result;
+  result.reserve(sides[0].size()+sides[1].size());
+  // Interleave the two catalogs so both factions appear without scrolling.
+  for(std::size_t row=0;row<std::max(sides[0].size(),sides[1].size());++row)
+    for(auto& side:sides)if(row<side.size())result.push_back(std::move(side[row]));
+  return result;
+}
+
+void updateSidebarAvailability(SidebarAssets& assets,const ra2::DefinitionRegistry& definitions,std::uint32_t player) {
+  for(const int panel:{0,1,2,3})for(auto& icon:assets.panelIcons[panel]) {
+    const auto building=panel<2?buildingIdForIcon(icon.id,icon.faction):std::optional<std::string>{};
+    const ra2::UnitTypeDef* type=nullptr;
+    if(building) {const auto it=definitions.units().find(*building);if(it!=definitions.units().end())type=&it->second;}
+    else if(panel>=2)type=definitions.sidebarUnit(icon.id,icon.faction==BuildFaction::Allied?"ALLIED":"SOVIET");
+    icon.available=type && type->support()!=ra2::SupportStatus::Unsupported;
+    icon.detail=std::string(icon.faction==BuildFaction::Allied?"Allied - ":"Soviet - ")+(type?type->id:"Missing type mapping");
+    if(!type)continue;
+    icon.detail+=" - $"+std::to_string(type->cost);
+    if(panel<2)icon.detail+="\nPower: "+std::string(type->power>0?"+":"")+std::to_string(type->power)+(type->requiresPower()?" (requires power)":"");
+    if(!icon.available)icon.detail+="\nUnsupported: "+(type->unsupported.empty()?"visual mapping":type->unsupported.front());
+    else if(!type->pending.empty()) {icon.detail+="\nPartial:";for(const auto& feature:type->pending)icon.detail+="\n  "+feature;}
+    else icon.detail+="\nReady";
+    if(!definitions.profile().sandbox && !definitions.allowedHouse(*type,definitions.playerHouse(player))) {
+      icon.available=false;icon.detail+="\nUnavailable for "+definitions.playerHouse(player);
+    }
+  }
+}
+
 SidebarAssets loadSidebarAssets(const std::filesystem::path& uiSpriteRoot,
                                 const std::filesystem::path& cameoSpriteRoot,
                                 const Palette& sidebarPalette,
-                                const Palette& cameoPalette,
-                                const BuildFaction faction) {
+                                const Palette& cameoPalette) {
   SidebarAssets assets{};
   assets.credits = loadShpFrameTexture(uiSpriteRoot / "credits.shp", sidebarPalette, 0);
   assets.top = loadShpFrameTexture(uiSpriteRoot / "top.shp", sidebarPalette, 0);
@@ -839,9 +885,8 @@ SidebarAssets loadSidebarAssets(const std::filesystem::path& uiSpriteRoot,
 
   const auto addPanel = [&](const SidebarTab tab) {
     auto& panel = assets.panelIcons[tabIndex(tab)];
-    forEachPanelIconName(faction, tab, [&](const char* name) {
-      panel.push_back(SidebarIcon{std::string(name), loadOptionalCameo(cameoSpriteRoot, cameoPalette, name)});
-    });
+    panel=makeSidebarPanel(tab);
+    for(auto& icon:panel)icon.texture=loadOptionalCameo(cameoSpriteRoot,cameoPalette,icon.id);
   };
 
   addPanel(SidebarTab::Base);
@@ -903,6 +948,28 @@ void destroySidebarAssets(SidebarAssets& assets) {
 
 void updateSidebarState(SidebarState& state, const std::uint32_t nowTicks) {
   state.flashOn = ((nowTicks / 180U) % 2U) != 0U;
+  auto& display=state.powerAnimation;
+  const int produced=std::max(0,state.powerProduced),consumed=std::max(0,state.powerConsumed);
+  if(!display.initialized) {
+    if(state.powerProduced<0)return;
+    display.initialized=true;display.started=nowTicks;display.outage=state.powerOutage;
+    display.targetProduced=produced;display.targetConsumed=consumed;
+    display.produced=display.fromProduced=produced;display.consumed=display.fromConsumed=consumed;
+    display.scale=display.fromScale=powerScale(produced,consumed);
+    return;
+  }
+  // Unsigned subtraction also handles SDL's millisecond counter wrapping.
+  const auto elapsed=nowTicks-display.started;
+  const double t=std::min(1.0,double(elapsed)/kPowerTransitionMs),ease=t*t*(3-2*t);
+  display.produced=display.fromProduced+(display.targetProduced-display.fromProduced)*ease;
+  display.consumed=display.fromConsumed+(display.targetConsumed-display.fromConsumed)*ease;
+  display.scale=display.fromScale+(powerScale(display.targetProduced,display.targetConsumed)-display.fromScale)*ease;
+  display.pulse=display.changed?std::max(0.f,1.f-float(elapsed)/kPowerPulseMs):0;
+  if(display.targetProduced!=produced || display.targetConsumed!=consumed || display.outage!=state.powerOutage) {
+    display.fromProduced=display.produced;display.fromConsumed=display.consumed;display.fromScale=display.scale;
+    display.targetProduced=produced;display.targetConsumed=consumed;display.outage=state.powerOutage;
+    display.started=nowTicks;display.pulse=1;display.changed=true;
+  }
 }
 
 SidebarClickResult handleSidebarLeftClick(const SidebarState& state,
@@ -955,6 +1022,8 @@ void applySidebarClick(SidebarState& state, const SidebarAssets& assets, const S
       }
       break;
     case SidebarClickAction::ClickIcon:
+      state.repairSelected=false;state.sellSelected=false;
+      break;
     case SidebarClickAction::None:
       break;
   }
@@ -986,35 +1055,41 @@ void drawSidebar(Renderer2D& renderer,
 
   drawTexturedRect(renderer, composedBottom, left, layout.bottomY, static_cast<float>(composedBottom.width), static_cast<float>(composedBottom.height));
 
-  const std::array<const char*, 42> powerPattern{{
-    "rd","ru","none","rd","ru","none","rd","ru","none","rd","ru","none",
-    "yd","yu","none","yd","yu","none","yd","yu","none","gd","gu","none",
-    "gd","gu","none","gd","gu","none","gd","gu","none","gd","gu","none",
-    "gd","gu","none","gd","gu","none"
-  }};
-  for (std::size_t i = 0; i < powerPattern.size(); ++i) {
-    const float y = layout.panelY + static_cast<float>(layout.visibleRows) * kRowHeight - 1.0f - static_cast<float>(i);
-    const std::string code = powerPattern[i];
-    if (code == "none") {
-      continue;
-    }
-
-    const UiTexture* line = nullptr;
-    float v0 = 0.0f;
-    float v1 = 0.5f;
-    if (code.front() == 'r') {
-      line = &assets.powerLines[3];
-    } else if (code.front() == 'y') {
-      line = &assets.powerLines[2];
-    } else {
-      line = &assets.powerLines[1];
-    }
-    if (code.back() == 'd') {
-      v0 = 0.5f;
-      v1 = 1.0f;
-    }
-    drawTexturedRect(renderer, *line, left + 5.0f, y, 12.0f, 1.0f, 0.0f, v0, 1.0f, v1);
+  const auto& display=state.powerAnimation;
+  const double produced=display.initialized?display.produced:std::max(0,state.powerProduced);
+  const double consumed=display.initialized?display.consumed:std::max(0,state.powerConsumed);
+  const double scale=display.initialized?display.scale:powerScale(int(produced),int(consumed));
+  const float meterTop=layout.panelY+3,meterBottom=layout.bottomY-3;
+  const int meterHeight=static_cast<int>(meterBottom-meterTop);
+  const int outputHeight=static_cast<int>(std::lround(meterHeight*produced/scale));
+  const float meterWidth=std::min(kPowerPanelWidth,float(assets.powerLines[0].width));
+  const float meterX=left+kPowerPanelWidth-meterWidth;
+  const auto& energized=assets.powerLines[powerColorFrame(state)];
+  // Original two-pixel powerp segments, separated by one empty row. The silver
+  // segment is an independent load marker, so a deficit remains visible.
+  for(int row=0;row<meterHeight;row+=3) {
+    const float y=meterBottom-row-2;
+    drawTexturedRect(renderer,assets.powerLines[0],meterX,y,meterWidth,2);
+    const int filled=std::clamp(outputHeight-row,0,2);
+    if(filled)drawTexturedRect(renderer,energized,meterX,y+2-filled,meterWidth,float(filled),0,1-filled*.5f,1,1);
   }
+  const float loadY=std::round(meterBottom-float(meterHeight*consumed/scale));
+  UiTexture white{};white.texture=renderer.whiteTexture();
+  drawTexturedRect(renderer,white,meterX,loadY-1,meterWidth,4,0,0,1,1,0,0,0,.85f);
+  drawTexturedRect(renderer,assets.powerLines[4],meterX,loadY,meterWidth,2);
+  drawTexturedRect(renderer,white,meterX+1,loadY,meterWidth-2,1,0,0,1,1,.82f,.90f,.95f,.9f);
+  if(display.pulse>0)drawTexturedRect(renderer,white,meterX,loadY,meterWidth,2,0,0,1,1,1,1,1,display.pulse*.55f);
+
+  // Keep the actual current balance visible in the original credits recess.
+  // Draw-list primitives do not create a window or capture sidebar input.
+  auto& overlay=*ImGui::GetForegroundDrawList();
+  const auto money=creditText(state.credits);
+  constexpr float moneySize=14;
+  const auto textSize=ImGui::GetFont()->CalcTextSizeA(moneySize,1000,0,money.c_str());
+  overlay.PushClipRect({left+12,layout.creditsY},{left+kSidebarWidth-12,layout.topY},true);
+  shadowText(overlay,{std::round(left+(kSidebarWidth-textSize.x)/2),std::round(layout.creditsY+(assets.credits.height-textSize.y)/2)},
+    moneySize,IM_COL32(250,231,154,255),money.c_str());
+  overlay.PopClipRect();
 
   const auto& icons = activePanelIcons(assets, state);
   const int scrollRows = std::min(state.scrollRows[tabIndex(state.selectedTab)],
@@ -1023,10 +1098,46 @@ void drawSidebar(Renderer2D& renderer,
   const std::size_t endIndex = std::min(icons.size(), startIndex + static_cast<std::size_t>(layout.visibleRows * 2));
   for (std::size_t iconIndex = startIndex; iconIndex < endIndex; ++iconIndex) {
     const auto rect = iconRect(layout, iconIndex - startIndex);
-    drawTexturedRect(renderer, icons[iconIndex].texture, rect.x, rect.y, rect.w, rect.h);
+    const float tint=icons[iconIndex].available?1.f:.35f;
+    drawTexturedRect(renderer, icons[iconIndex].texture, rect.x, rect.y, rect.w, rect.h,0,0,1,1,tint,tint,tint);
   }
 
   glDeleteTextures(1, &composedTop.texture);
   glDeleteTextures(1, &composedSide1.texture);
   glDeleteTextures(1, &composedBottom.texture);
+}
+
+void drawPowerPlantReadout(const SidebarState& state,const float centerX,const float centerY,
+                          const int viewportWidth,const int viewportHeight) {
+  constexpr float height=46,fontSize=15;
+  const std::array<std::string,2> numbers{std::to_string(state.powerProduced),std::to_string(state.powerConsumed)};
+  const auto measure=[&](const std::string& text){return ImGui::GetFont()->CalcTextSizeA(fontSize,1000,0,text.c_str()).x;};
+  const float width=std::max(116.f,std::ceil(std::max(measure(numbers[0]),measure(numbers[1]))+62));
+  const float x=std::round(centerX-width/2),y=std::round(centerY-height/2);
+  const float worldRight=viewportWidth-kSidebarWidth;
+  if(x+width<=0 || x>=worldRight || y+height<=0 || y>=viewportHeight)return;
+  auto& draw=*ImGui::GetBackgroundDrawList();
+  draw.PushClipRect({0,0},{worldRight,float(viewportHeight)},true);
+  draw.AddRectFilled({x,y},{x+width,y+height},IM_COL32(9,16,18,180),2);
+  draw.AddRect({x,y},{x+width,y+height},IM_COL32(116,137,143,160),2);
+  const auto color=powerTextColor(state);
+  for(int row=0;row<2;++row) {
+    shadowText(draw,{x+10,y+7+row*20},fontSize,IM_COL32(220,229,225,255),row?"负载":"电力");
+    shadowText(draw,{x+width-10-measure(numbers[row]),y+7+row*20},fontSize,
+               row?IM_COL32(240,240,230,255):color,numbers[row].c_str());
+  }
+  draw.PopClipRect();
+}
+
+const SidebarIcon* hoveredSidebarIcon(const SidebarState& state,const SidebarAssets& assets,
+                                     int width,int height,float x,float y) {
+  const auto layout=makeLayout(float(width)-kSidebarWidth,height,assets);
+  const auto& icons=activePanelIcons(assets,state);
+  const auto first=static_cast<std::size_t>(std::min(state.scrollRows[tabIndex(state.selectedTab)],maxScrollRows(icons,layout.visibleRows))*2);
+  const auto last=std::min(icons.size(),first+static_cast<std::size_t>(layout.visibleRows*2));
+  for(auto i=first;i<last;++i) {
+    const auto rect=iconRect(layout,i-first);
+    if(x>=rect.x && y>=rect.y && x<rect.x+rect.w && y<rect.y+rect.h)return &icons[i];
+  }
+  return nullptr;
 }

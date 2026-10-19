@@ -30,7 +30,8 @@ void configTests(const DefinitionRegistry& defs) {
   require(defs.weapon(defs.unit("HTNK").primary).damage == 90, "Primary reference not resolved");
   require(defs.weapon(defs.unit("MTNK").primary).damage == 65, "Grizzly weapon wrong");
   require(defs.unit("AMCV").deploysInto == "GACNST", "Deploy reference wrong");
-  require(!defs.unit("BEAG").unsupported.empty() && !defs.unit("DEST").unsupported.empty(), "Unsupported air/naval silently accepted");
+  require(!defs.unit("PDPLANE").unsupported.empty() && !defs.unit("HIND").unsupported.empty(), "Unsupported standalone aircraft silently accepted");
+  require(defs.unit("DEST").unsupported.empty() && defs.unit("DEST").navalSpawn, "Destroyer ASW capability rejected");
   require(defs.unit("HTNK").unsupported.empty(), "Rhino capabilities rejected");
   require(defs.unit("MTNK").unsupported.empty(), "Grizzly capabilities rejected");
   const auto art = ArtIni::fromDocument(defs.art(), defs.replica());
@@ -67,7 +68,7 @@ void behaviorTests(const DefinitionRegistry& defs) {
   const auto rhino = world.spawn("HTNK", {0,0});
   const auto grizzly = world.spawn("MTNK", {0,4});
   require(rhino && grizzly && find(world, rhino).hp == 400 && find(world, grizzly).hp == 300, "Unified spawning ignored Strength");
-  require(world.spawn("BEAG", {9,9}) == 0 && world.spawn("HTNK", {0,0}) == 0, "Unsupported or overlapping spawn accepted");
+  require(world.spawn("PDPLANE", {9,9}) == 0 && world.spawn("HTNK", {0,0}) == 0, "Unsupported or overlapping spawn accepted");
   require(world.enqueue({0,0,1,CommandKind::Move,rhino,0,{6,0}}), "Move not queued");
   require(!world.enqueue({0,0,1,CommandKind::Move,rhino,0,{6,0}}), "Duplicate command accepted");
   world.enqueue({0,0,2,CommandKind::Move,grizzly,0,{6,4}});

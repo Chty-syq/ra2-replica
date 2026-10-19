@@ -56,7 +56,8 @@ void buildRenderQueue(const BuildingAssetMap& buildingAssets,
                       Vec2 mapOrigin,
                       float tileWidth,
                       float tileHeight,
-                      std::vector<BuildingRenderCommand>& renderQueue);
+                      std::vector<BuildingRenderCommand>& renderQueue,
+                      std::optional<bool> placementAllowed=std::nullopt);
 
 [[nodiscard]] std::optional<std::size_t> hitTestBuildingAtPoint(const BuildingAssetMap& buildingAssets,
                                                                 const std::vector<BuildingInstance>& buildings,

@@ -3,19 +3,25 @@
 
 ArtIni ArtIni::load(const std::filesystem::path& path) {
   const auto supplement = path.parent_path() / "replica.ini";
-  return fromDocument(ra2::IniDocument::load(path), std::filesystem::exists(supplement) ? ra2::IniDocument::load(supplement) : ra2::IniDocument{});
+  const auto rules = path.parent_path() / "rules.ini";
+  return fromDocument(ra2::IniDocument::load(path), std::filesystem::exists(supplement) ? ra2::IniDocument::load(supplement) : ra2::IniDocument{},
+    std::filesystem::exists(rules)?ra2::IniDocument::load(rules):ra2::IniDocument{});
 }
-ArtIni ArtIni::fromDocument(ra2::IniDocument document, ra2::IniDocument replica) {
+ArtIni ArtIni::fromDocument(ra2::IniDocument document, ra2::IniDocument replica, ra2::IniDocument rules) {
   ArtIni result;
   result.document_ = std::move(document);
   result.replica_ = std::move(replica);
+  result.rules_ = std::move(rules);
   return result;
 }
+std::string ArtIni::buildingArtId(std::string_view id) const { return rules_.string(id,"Image",std::string(id)); }
 ArtDefinition ArtIni::building(std::string id) const {
   ArtDefinition definition;
   definition.id = id;
+  const auto logicalProfile="Building."+id;
+  id=buildingArtId(id);
   definition.image = document_.string(id, "Image", id);
-  const auto profile = "Building." + id;
+  const auto profile = replica_.contains(logicalProfile)?logicalProfile:"Building."+id;
   const auto layerProfile = replica_.find(profile, "Layers") ? profile : "BuildingDefaults";
   auto layers = replica_.list(layerProfile, "Layers");
   if (layers.empty()) layers = {"Base", "Bib:UnderUnit", "Anim.IdleAnim", "Anim.ActiveAnim", "Anim.ActiveAnimTwo", "Anim.ActiveAnimThree", "Anim.ActiveAnimFour"};
@@ -27,6 +33,7 @@ ArtDefinition ArtIni::building(std::string id) const {
   definition.productionSplit = replica_.boolean(profile, "ProductionSplit");
   definition.deferOverUnit = replica_.boolean(profile, "DeferOverUnit");
   definition.animationFrameLimit = replica_.integer(profile, "AnimationFrameLimit");
+  definition.garrisonFrames=replica_.boolean(profile,"GarrisonFrames");
   if (document_.find(id, "buildup")) definition.buildup = document_.string(id, "buildup");
   if (document_.find(id, "bibShape")) definition.bibShape = document_.string(id, "bibShape");
   if (document_.find(id, "idleAnim")) definition.idleAnim = document_.string(id, "idleAnim");
@@ -54,6 +61,7 @@ ArtDefinition ArtIni::building(std::string id) const {
   definition.terrainPalette = document_.boolean(id, "terrainPalette", false);
   definition.shadow = document_.boolean(id, "shadow", false);
   definition.flat = document_.boolean(id, "flat", false);
+  definition.wall = document_.find(id,"ToOverlay")!=nullptr;
   definition.activeAnimPowered = document_.boolean(id, "activeAnimPowered", true);
   if (const auto value = document_.string(id, "Foundation"); !value.empty()) {
     const auto x = value.find_first_of("xX");
@@ -67,7 +75,7 @@ ArtDefinition ArtIni::building(std::string id) const {
   return definition;
 }
 int ArtIni::animationFrameLimit(std::string_view id) const { return replica_.integer("Animation." + std::string(id), "FrameLimit"); }
-std::string ArtIni::field(std::string_view id, std::string_view key) const { return document_.string(id, key); }
+std::string ArtIni::field(std::string_view id, std::string_view key) const { return document_.string(buildingArtId(id), key); }
 AnimationDefinition ArtIni::animation(std::string id) const {
   AnimationDefinition definition;
   definition.id = id;
@@ -87,6 +95,7 @@ AnimationDefinition ArtIni::animation(std::string id) const {
 
 BuildingAnimationPlacement ArtIni::animationPlacement(std::string_view buildingId, std::string_view slot) const {
   const std::string key(slot);
-  return {{document_.integer(buildingId, key + "X"), document_.integer(buildingId, key + "Y")},
-          document_.integer(buildingId, key + "ZAdjust"), document_.integer(buildingId, key + "YSort")};
+  const auto artId=buildingArtId(buildingId);
+  return {{document_.integer(artId, key + "X"), document_.integer(artId, key + "Y")},
+          document_.integer(artId, key + "ZAdjust"), document_.integer(artId, key + "YSort")};
 }

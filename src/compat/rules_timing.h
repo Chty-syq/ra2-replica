@@ -8,6 +8,16 @@ namespace ra2::compat {
 inline constexpr int kLeptonsPerCell = 256;
 inline constexpr int kProductionStages = 54;
 inline constexpr int kRatioScale = 1000000;
+constexpr int buildingRefund(int cost,int strength,int hp,int percentMillionths) {
+  if(strength<=0)return 0;
+  const auto scaled=std::int64_t(cost)*percentMillionths;
+  const auto health=std::clamp(hp,0,strength);
+  return int(((scaled/kRatioScale)*health+(scaled%kRatioScale)*health/kRatioScale)/strength);
+}
+constexpr int buildingRepairCost(int cost,int strength,int amount,int percentMillionths) {
+  if(cost<=0 || percentMillionths<=0 || amount<=0 || strength<=0)return 0;
+  return std::max(1,buildingRefund(cost,strength,amount,percentMillionths));
+}
 
 // Evidence and scope: docs/gameplay-calibration-2026-09-12.md.
 constexpr int movementLeptons(int rawSpeed) {

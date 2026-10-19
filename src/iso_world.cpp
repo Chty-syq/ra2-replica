@@ -249,11 +249,11 @@ void drawPlacementPreview(Renderer2D& renderer,
                           const MapGrid& map,
                           const Vec2 origin,
                           const float tileWidth,
-                          const float tileHeight) {
+                          const float tileHeight,std::optional<bool> allowed) {
   // 每个格子都单独着色，这样即便 footprint 很大或不规则，
   // 也能很容易看出具体是哪一格发生了占用冲突。
   for (const auto coord : foundationTiles(placement)) {
-    const bool buildable = map.isBuildable(coord);
+    const bool buildable = allowed.value_or(map.isBuildable(coord));
     const float r = buildable ? 0.35f : 0.90f;
     const float g = buildable ? 0.85f : 0.25f;
     const float b = buildable ? 0.95f : 0.25f;
@@ -271,10 +271,11 @@ void drawBuildingInstance(Renderer2D& renderer,
                           const float tileHeight,
                           const std::uint32_t nowTicks,
                           const float depth01,
-                          const float tintR,
-                          const float tintG,
-                          const float tintB,
+                          const float inputTintR,
+                          const float inputTintG,
+                          const float inputTintB,
                           const float tintA) {
+  const float tintR=inputTintR*(instance.frozen?.4f:1.f),tintG=inputTintG*(instance.frozen?.7f:1.f),tintB=inputTintB;
   // 每一帧会先确定“基础锚点帧”：
   // - 建造中：使用 buildup 当前帧
   // - 完成态：使用第一层完成态帧
@@ -422,9 +423,9 @@ void drawBuildingInstance(Renderer2D& renderer,
       continue;
     }
 
-    const UiTexture* layerTexture = buildingLayerTexture(layer, instance, nowTicks);
-
-    drawCompleteLayer(*layerTexture, layer);
+    if (const auto* layerTexture = buildingLayerTexture(layer, instance, nowTicks)) {
+      drawCompleteLayer(*layerTexture, layer);
+    }
   }
 }
 

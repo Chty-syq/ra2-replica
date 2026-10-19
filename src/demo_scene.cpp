@@ -453,8 +453,8 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                                      1.0f,
                                                      baseForegroundV1,
                                                      depth01,
-                                                     1.0f,
-                                                     1.0f,
+                                                     instance.frozen?.4f:1.0f,
+                                                     instance.frozen?.7f:1.0f,
                                                      1.0f,
                                                      1.0f);
     renderer.draw(GL_TRIANGLES, *texture, baseVertices.data(), baseVertices.size());
@@ -471,6 +471,7 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
     }
 
     const UiTexture* layerTexture = buildingLayerTexture(layer, instance, nowTicks);
+    if (layerTexture == nullptr) continue;
 
     const auto spriteTopLeft = buildingSpriteTopLeft(foundationAnchor, layerTexture->width, layerTexture->height, layer.offset);
     const Vec2 layerTopRight{spriteTopLeft.x + layerTexture->width, spriteTopLeft.y};
@@ -481,8 +482,8 @@ void drawBuildingForegroundOverlay(Renderer2D& renderer,
                                                 layerBottomRight,
                                                 layerBottomLeft,
                                                 depth01,
-                                                1.0f,
-                                                1.0f,
+                                                instance.frozen?.4f:1.0f,
+                                                instance.frozen?.7f:1.0f,
                                                 1.0f,
                                                 1.0f);
     renderer.draw(GL_TRIANGLES, *layerTexture, layerVertices.data(), layerVertices.size());
@@ -657,7 +658,7 @@ void buildRenderQueue(const BuildingAssetMap& buildingAssets,
                       const Vec2 mapOrigin,
                       const float tileWidth,
                       const float tileHeight,
-                      std::vector<BuildingRenderCommand>& renderQueue) {
+                      std::vector<BuildingRenderCommand>& renderQueue,std::optional<bool> placementAllowed) {
   renderQueue.clear();
   renderQueue.reserve(buildings.size() + (selectedBuildAsset != nullptr ? 1 : 0));
 
@@ -674,8 +675,8 @@ void buildRenderQueue(const BuildingAssetMap& buildingAssets,
     return;
   }
 
-  const bool previewValid = map.canPlace(foundationTiles(previewPlacement));
-  drawPlacementPreview(renderer, previewPlacement, map, mapOrigin, tileWidth, tileHeight);
+  const bool previewValid = placementAllowed.value_or(map.canPlace(foundationTiles(previewPlacement)));
+  drawPlacementPreview(renderer, previewPlacement, map, mapOrigin, tileWidth, tileHeight,placementAllowed);
   renderQueue.push_back(makeBuildingRenderCommand(
     *selectedBuildAsset,
     BuildingInstance{selectedBuildAsset->id, previewPlacement, BuildingState::Preview, nowTicks},
@@ -699,6 +700,44 @@ std::optional<std::size_t> hitTestBuildingAtPoint(const BuildingAssetMap& buildi
   float selectedDepth = std::numeric_limits<float>::infinity();
   const auto mouseTile = screenToIso(mouseX, mouseY, mapOrigin, tileWidth, tileHeight);
 
+  const auto hitTexture=[&](const UiTexture& texture,Vec2 topLeft) {
+    const int x=static_cast<int>(std::floor(mouseX-topLeft.x)),y=static_cast<int>(std::floor(mouseY-topLeft.y));
+    if(x<0 || y<0 || x>=texture.width || y>=texture.height)return false;
+    const auto pixel=static_cast<std::size_t>(y)*texture.width+x;
+    if(pixel/8<texture.hitMask.size())return (texture.hitMask[pixel/8]&(1u<<(pixel%8)))!=0;
+    return pixel*4+3<texture.rgba.size() && texture.rgba[pixel*4+3]!=0;
+  };
+
+  // Pick visible pixels first. A construction yard's roof and crane extend
+  // above its ground footprint; clicking them must select the same deployed MCV.
+  for(std::size_t index=0;index<buildings.size();++index) {
+    const auto& building=buildings[index];const auto& asset=assetForInstance(buildingAssets,building);
+    const auto center=buildingDrawCenter(building.placement,mapOrigin,tileWidth,tileHeight);
+    const auto now=ra2::gameMilliseconds(building.visualFrame);
+    bool hit=false;
+    if((building.state==BuildingState::Constructing || building.state==BuildingState::Packing) && !asset.buildupTextures.empty()) {
+      const auto& texture=asset.buildupTextures[buildingBuildupFrameIndex(building,asset.buildupTextures.size(),now)];
+      hit=hitTexture(texture,buildingSpriteTopLeft(center,texture.width,texture.height));
+    } else if(!asset.completeLayers.empty()) {
+      const bool split=building.layeredFactory && building.productionSplit && building.factoryExitActive;
+      for(const auto& layer:asset.completeLayers) {
+        const bool production=layer.role==BuildingAsset::LayerRole::ProductionUnderUnit ||
+                              layer.role==BuildingAsset::LayerRole::ProductionOverUnit;
+        if((production && !split) || (split && !production && layer.role!=BuildingAsset::LayerRole::UnderUnit))continue;
+        if(const auto* texture=buildingLayerTexture(layer,building,now))
+          hit|=hitTexture(*texture,buildingSpriteTopLeft(center,texture->width,texture->height,layer.offset));
+      }
+    } else {
+      hit=hitTexture(asset.completeTexture,buildingSpriteTopLeft(center,asset.completeTexture.width,asset.completeTexture.height));
+    }
+    if(hit) {
+      const auto depth=makeBuildingRenderCommand(asset,building,mapOrigin,tileWidth,tileHeight).depth01;
+      if(depth<selectedDepth){selectedIndex=index;selectedDepth=depth;}
+    }
+  }
+  if(selectedIndex)return selectedIndex;
+
+  // Keep the ground footprint clickable, including open areas between layers.
   for (std::size_t index = 0; index < buildings.size(); ++index) {
     const auto& building = buildings[index];
     const auto footprint = foundationTiles(building.placement);
@@ -856,7 +895,9 @@ void redrawBuildingOccludersForRhino(Renderer2D& renderer,
             scissorWidth,
             scissorHeight);
 
+  const auto friendlyColor=renderer.remapColor();
   for (const auto& occluder : occluders) {
+    renderer.setRemapColor(occluder.instance.neutral?Rgba{170,170,170,255}:occluder.instance.owner?Rgba{235,45,45,255}:friendlyColor);
     drawBuildingForegroundOverlay(renderer,
                                   *occluder.asset,
                                   occluder.instance,
@@ -868,6 +909,7 @@ void redrawBuildingOccludersForRhino(Renderer2D& renderer,
                                   occluder.depth01);
   }
 
+  renderer.setRemapColor(friendlyColor);
   glDisable(GL_SCISSOR_TEST);
 }
 

@@ -31,6 +31,20 @@ enum class SidebarClickAction {
 struct SidebarIcon {
   std::string id;
   UiTexture texture;
+  bool available=true;
+  std::string detail{};
+  BuildFaction faction=BuildFaction::Allied;
+};
+
+// Presentation only: the simulation's power values remain authoritative.
+// A new target starts at the current displayed value, including mid-animation.
+struct SidebarPowerAnimation {
+  bool initialized=false, outage=false, changed=false;
+  int targetProduced=0, targetConsumed=0;
+  std::uint32_t started=0;
+  double produced=0, consumed=0, scale=400;
+  double fromProduced=0, fromConsumed=0, fromScale=400;
+  float pulse=0;
 };
 
 struct SidebarState {
@@ -42,6 +56,10 @@ struct SidebarState {
   std::array<bool, 4> tabReady{};
   bool flashOn = false;
   int visibleRowsHint = 1;
+  int powerProduced=-1, powerConsumed=0;
+  int credits=0;
+  bool powerOutage=false;
+  SidebarPowerAnimation powerAnimation{};
 };
 
 struct SidebarClickResult {
@@ -49,6 +67,7 @@ struct SidebarClickResult {
   SidebarClickAction action = SidebarClickAction::None;
   SidebarTab tab = SidebarTab::Base;
   std::string iconId;
+  BuildFaction faction=BuildFaction::Allied;
 };
 
 struct SidebarAssets {
@@ -70,11 +89,15 @@ struct SidebarAssets {
   std::array<std::vector<SidebarIcon>, 4> panelIcons;
 };
 
+// The catalog is independent of the sidebar skin. Shared cameos (engineers,
+// MCVs) retain their faction so clicks resolve to the correct concrete type.
+std::vector<SidebarIcon> makeSidebarPanel(SidebarTab tab);
+namespace ra2 { class DefinitionRegistry; }
+void updateSidebarAvailability(SidebarAssets&,const ra2::DefinitionRegistry&,std::uint32_t player=0);
 SidebarAssets loadSidebarAssets(const std::filesystem::path& uiSpriteRoot,
                                 const std::filesystem::path& cameoSpriteRoot,
                                 const Palette& sidebarPalette,
-                                const Palette& cameoPalette,
-                                BuildFaction faction);
+                                const Palette& cameoPalette);
 void destroySidebarAssets(SidebarAssets& assets);
 
 int computeSidebarVisibleRows(const SidebarAssets& assets, int viewportHeight);
@@ -91,3 +114,6 @@ void drawSidebar(Renderer2D& renderer,
                  int viewportHeight,
                  const SidebarAssets& assets,
                  const SidebarState& state);
+// Center this readout on the selected owned power plant, in world screen space.
+void drawPowerPlantReadout(const SidebarState&,float centerX,float centerY,int viewportWidth,int viewportHeight);
+const SidebarIcon* hoveredSidebarIcon(const SidebarState&,const SidebarAssets&,int,int,float,float);

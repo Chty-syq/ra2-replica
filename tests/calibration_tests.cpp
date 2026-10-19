@@ -91,12 +91,27 @@ void configuration(const DefinitionRegistry& defs) {
           compat::normalizedAnimationDelay(4,{GameSpeedMode::Multiplayer,4})==5 &&
           compat::normalizedAnimationDelay(6,{GameSpeedMode::Multiplayer,4})==16,"Normalized animation delay table changed");
 }
+void nativeGlobalSections(const DefinitionRegistry& defs) {
+  const auto custom=changed(defs,"[CombatDamage]\nIvanDamage=73\nIvanTimedDelay=21\nIvanIconFlickerRate=4\nC4Delay=.1\n[AudioVisual]\nGravity=3\nConditionRed=10%\nConditionYellow=40%\nPoseDir=6\nWarpOut=S_BANG34\n");
+  require(custom.profile().gravity==3 && custom.profile().conditionRedMillionths==100000 && custom.profile().selfHealCapMillionths==400000,"Native AudioVisual values silently replaced by General fallbacks");
+  require(custom.ivanBomb().damage==73 && custom.ivanBomb().delay==21 && custom.ivanBomb().flickerFrames==4,"Native CombatDamage bomb values silently replaced by General fallbacks");
+  requireRejected([&]{changed(defs,"[CombatDamage]\nC4Delay=0");},"Native C4 delay validation read the wrong section");
+  requireRejected([&]{changed(defs,"[AudioVisual]\nGravity=0");},"Native gravity validation read the wrong section");
+  World w(custom);const auto airport=w.spawn("GAAIRC",{12,0}),plane=w.spawn("ORCA",{});require(airport && plane,"Native landing heading setup");
+  require(view(w,plane).heading==24576,"Native AudioVisual.PoseDir was ignored");
+  const auto chrono=w.spawn("CLEG",{});w.enqueue({1,0,1,CommandKind::Move,chrono,0,{4,0}});w.step();
+  require(std::any_of(w.effects().begin(),w.effects().end(),[](const auto& effect){return effect.animation=="S_BANG34";}),"Native AudioVisual.WarpOut was ignored");
+  World c4(custom);const auto commando=c4.spawn("TANY",{}),target=c4.spawn("GAPOWR",{2,0},1);c4.enqueue({1,0,1,CommandKind::AttackEntity,commando,target});
+  Tick planted=0;for(int i=0;i<200 && !planted;++i){c4.step();for(const auto& e:c4.snapshot())if(e.id==target && e.c4Detonates)planted=e.c4Detonates;}
+  require(planted && planted-c4.tick()==90,"Native CombatDamage.C4Delay did not change the planted charge");
+}
+
 }
 int main(int argc,char** argv) {
   try {
     require(argc==2,"Expected settings path");
     const auto defs=DefinitionRegistry::load(argv[1]);
-    movement(defs); rotation(defs); production(defs); configuration(defs);
+    movement(defs); rotation(defs); production(defs); configuration(defs);nativeGlobalSections(defs);
     std::cout << "Rule calibration regressions passed; configuration: " << defs.fingerprint() << '\n';
     return 0;
   } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

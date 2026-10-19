@@ -87,7 +87,10 @@ void installChineseFont(ImGuiIO& io) {
     "C:\\Windows\\Fonts\\msyh.ttc",
     "C:\\Windows\\Fonts\\msyhl.ttc",
     "C:\\Windows\\Fonts\\simhei.ttf",
-    "C:\\Windows\\Fonts\\simsun.ttc"
+    "C:\\Windows\\Fonts\\simsun.ttc",
+    "/System/Library/Fonts/PingFang.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
   };
 
   for (const auto& path : candidates) {

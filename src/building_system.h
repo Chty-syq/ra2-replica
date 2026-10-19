@@ -39,7 +39,8 @@ struct BuildingAsset {
     Normal,
     OverUnit,
     ProductionUnderUnit,
-    ProductionOverUnit
+    ProductionOverUnit,
+    Fire
   };
 
   // 完成态的基础纹理和原始帧。
@@ -60,6 +61,9 @@ struct BuildingAsset {
     int zAdjust = 0;
     int ySort = 0;
     int normalZAdjust = 0;
+    bool garrisonFrames=false;
+    bool hideWhenUnpowered=false;
+    bool wallFrames=false;
   };
   std::vector<RenderLayer> completeLayers;
 
@@ -90,18 +94,45 @@ struct BuildingInstance {
   std::uint32_t factoryCycleStartTicks = 0;
   ra2::GameFrame visualFrame = 0, animationStartedFrame = 0, factoryCycleStartedFrame = 0;
   ra2::GameSpeed animationSpeed{}, productionAnimationSpeed{};
+  std::uint32_t owner=0;
+  bool garrisoned=false;
+  bool neutral=false;
+  int wallConnections=0;
+  bool powered=true;
+  bool frozen=false;
+  bool repairing=false, repairPaused=false, selling=false;
+  ra2::GameFrame repairStartedFrame=0;
+  ra2::GameFrame firingStartedFrame=0;
 };
 
 // Every building pass uses the same clock, including foreground redraws.
 // Production layers start a fresh loop for each simulation-owned exit cycle.
+// nullptr is a valid hidden layer (idle/expired Fire or unpowered animation).
+// Every rendering and picking pass must skip it.
 [[nodiscard]] inline const UiTexture* buildingLayerTexture(const BuildingAsset::RenderLayer& layer,
                                                           const BuildingInstance& instance,
                                                           std::uint32_t nowTicks) {
   if (layer.textures.empty()) return nullptr;
+  if(!instance.powered && layer.hideWhenUnpowered)return nullptr;
+  if(layer.wallFrames) {
+    const int damage=instance.maxHp>0?std::clamp(int((instance.maxHp-instance.hp)*3LL/instance.maxHp),0,2):0;
+    return &layer.textures[std::min<std::size_t>(instance.wallConnections+16*damage,layer.textures.size()-1)];
+  }
+  if(layer.role==BuildingAsset::LayerRole::Fire) {
+    if(!instance.powered || !instance.firingStartedFrame || instance.visualFrame<instance.firingStartedFrame)return nullptr;
+    const int delay=layer.normalized?ra2::compat::normalizedAnimationDelay(layer.gameFrameDelay,instance.animationSpeed):layer.gameFrameDelay;
+    const auto frame=(instance.visualFrame-instance.firingStartedFrame)/std::max(1,delay);
+    return frame<layer.textures.size()?&layer.textures[frame]:nullptr;
+  }
+  if(layer.garrisonFrames) {
+    const auto frame=instance.garrisoned?2:instance.hp*2LL<=instance.maxHp?1:0;
+    return &layer.textures[std::min<std::size_t>(frame,layer.textures.size()-1)];
+  }
   const bool production = layer.role == BuildingAsset::LayerRole::ProductionUnderUnit ||
                           layer.role == BuildingAsset::LayerRole::ProductionOverUnit;
   const bool factoryCycle = production && instance.factoryExitActive;
   if (layer.gameFrameDelay >= 0) {
+    if(!instance.powered)return &layer.textures.front();
     const auto speed = factoryCycle ? instance.productionAnimationSpeed : instance.animationSpeed;
     const int delay = layer.normalized ? ra2::compat::normalizedAnimationDelay(layer.gameFrameDelay,speed) : layer.gameFrameDelay;
     const auto startFrame = factoryCycle ? instance.factoryCycleStartedFrame : instance.animationStartedFrame;
